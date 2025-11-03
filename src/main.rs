@@ -3,8 +3,7 @@
 
 use cortex_m_rt::entry;
 use defmt_rtt as _;
-use embedded_hal::digital::v2::OutputPin;
-use embedded_time::fixed_point::FixedPoint;
+use embedded_hal::digital::v2::{InputPin, OutputPin};
 use panic_probe as _;
 use rp2040_hal as hal;
 
@@ -39,7 +38,7 @@ fn main() -> ! {
     .ok()
     .unwrap();
 
-    let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().integer());
+    let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
 
     let pins = hal::gpio::Pins::new(
         pac.IO_BANK0,
@@ -48,12 +47,58 @@ fn main() -> ! {
         &mut pac.RESETS,
     );
 
-    let mut led_pin = pins.gpio25.into_push_pull_output();
+    let mut pin_led_metr = pins.gpio10.into_push_pull_output().into_dyn_pin();
+    let mut pin_led_conn = pins.gpio11.into_push_pull_output().into_dyn_pin();
+    let mut pin_led_play = pins.gpio12.into_push_pull_output().into_dyn_pin();
+    let mut pin_led_vlt = pins.gpio13.into_push_pull_output().into_dyn_pin();
+
+    let mut pin_button_row_1 = pins.gpio6.into_pull_up_input().into_dyn_pin();
+    let mut pin_button_row_2 = pins.gpio7.into_pull_up_input().into_dyn_pin();
+    let mut pin_button_row_3 = pins.gpio8.into_pull_up_input().into_dyn_pin();
+
+    let mut pin_button_col_1 = pins.gpio2.into_push_pull_output().into_dyn_pin();
+    let mut pin_button_col_2 = pins.gpio3.into_push_pull_output().into_dyn_pin();
+    let mut pin_button_col_3 = pins.gpio4.into_push_pull_output().into_dyn_pin();
+    let mut pin_button_col_4 = pins.gpio5.into_push_pull_output().into_dyn_pin();
 
     loop {
-        led_pin.set_high().unwrap();
-        delay.delay_ms(500);
-        led_pin.set_low().unwrap();
-        delay.delay_ms(500);
+        if button_down(&mut pin_button_col_3, &pin_button_row_2).expect("") {
+            pin_led_vlt.set_high().unwrap();
+        } else {
+            pin_led_vlt.set_low().unwrap();
+        }
+        pin_led_conn.set_high().unwrap();
+        delay.delay_ms(50);
+        pin_led_conn.set_low().unwrap();
+        delay.delay_ms(50);
     }
+}
+
+enum Button {
+    MetStart,
+    MetStop,
+    Back,
+    Menu,
+    MetTPlus,
+    MetTMinus,
+    MetBPlus,
+    MetBMinus,
+    Next,
+    Prev,
+    Stop,
+    Start,
+}
+
+fn button_down(
+    col: &mut hal::gpio::Pin<
+        hal::gpio::DynPinId,
+        hal::gpio::FunctionSioOutput,
+        hal::gpio::PullDown,
+    >,
+    row: &hal::gpio::Pin<hal::gpio::DynPinId, hal::gpio::FunctionSioInput, hal::gpio::PullUp>,
+) -> Result<bool, core::convert::Infallible> {
+    col.set_high();
+    let b = row.is_high();
+    col.set_low();
+    return b;
 }
