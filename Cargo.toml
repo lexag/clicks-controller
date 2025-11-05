@@ -18,6 +18,10 @@ defmt-rtt = "0.3.0"
 embedded-hal ="0.2.5"
 panic-halt= "0.2.0"
 critical-section = "1.2"
+ssd1306 = "0.10.0"
+embedded-graphics = "0.8.1"
+embedded-menu = "0.6.1"
+bitflags = "2.10.0"
 
 # this lets you use `cargo fix`!
 [[bin]]
