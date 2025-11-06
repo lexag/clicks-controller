@@ -7,29 +7,62 @@ use cortex_m_rt::entry;
 use defmt_rtt as _;
 use embedded_hal::digital::v2::{InputPin, OutputPin};
 use panic_probe as _;
-use rp2040_hal as hal;
+use rp2040_hal::{
+    self as hal,
+    fugit::{MicrosDurationU32, Rate},
+    gpio::{
+        bank0::{Gpio10, Gpio25},
+        DynFunction, DynPinId, DynPullType, Function, FunctionPwm, FunctionSioOutput, PullDown,
+        PullNone,
+    },
+    timer::{Alarm, Alarm0},
+};
 
 use bitflags::bitflags;
+use core::{
+    cell::RefCell,
+    sync::atomic::{AtomicBool, Ordering},
+};
+use cortex_m::interrupt::Mutex;
 use embedded_graphics::{
     image::{Image, ImageRaw},
+    mono_font::{
+        ascii::{FONT_6X10, FONT_8X13},
+        MonoTextStyleBuilder,
+    },
     pixelcolor::BinaryColor,
+    prelude::Dimensions,
+    text::{Text, TextStyleBuilder},
 };
 use embedded_graphics::{prelude::Size, Drawable};
 use embedded_menu::{
     interaction::{Action, Interaction, Navigation},
     Menu, SelectValue,
 };
+use embedded_time::duration::Microseconds;
 use hal::{
     clocks::{init_clocks_and_plls, Clock},
+    gpio::Pin,
     pac,
+    pac::interrupt,
     sio::Sio,
     watchdog::Watchdog,
 };
-use ssd1306::mode::DisplayConfig;
+use ssd1306::{
+    mode::{BufferedGraphicsMode, DisplayConfig},
+    size::DisplaySize128x64,
+};
 
 #[unsafe(link_section = ".boot2")]
 #[used]
 pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_W25Q080;
+
+type MetrLEDPinType = Pin<Gpio10, FunctionSioOutput, PullDown>;
+
+static G_ALARM0: Mutex<RefCell<Option<Alarm0>>> = Mutex::new(RefCell::new(None));
+static G_LED_PIN: Mutex<RefCell<Option<MetrLEDPinType>>> = Mutex::new(RefCell::new(None));
+static G_IS_LED_HIGH: AtomicBool = AtomicBool::new(false);
+static G_TIMER: Mutex<RefCell<Option<hal::Timer>>> = Mutex::new(RefCell::new(None));
 
 #[entry]
 fn main() -> ! {
@@ -50,6 +83,9 @@ fn main() -> ! {
     )
     .ok()
     .unwrap();
+
+    let mut timer = rp2040_hal::Timer::new(pac.TIMER, &mut pac.RESETS, &clocks);
+    let mut metr_alarm = timer.alarm_0().unwrap();
 
     let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
 
@@ -81,10 +117,12 @@ fn main() -> ! {
     .into_buffered_graphics_mode();
     display.init().unwrap();
 
-    let mut pin_led_metr = pins.gpio10.into_push_pull_output().into_dyn_pin();
+    let mut pin_led_metr: MetrLEDPinType = pins.gpio10.into_push_pull_output();
     let mut pin_led_conn = pins.gpio11.into_push_pull_output().into_dyn_pin();
     let mut pin_led_play = pins.gpio12.into_push_pull_output().into_dyn_pin();
     let mut pin_led_vlt = pins.gpio13.into_push_pull_output().into_dyn_pin();
+
+    pin_led_metr.set_low();
 
     let mut button_rows = [
         pins.gpio6.into_push_pull_output().into_dyn_pin(),
@@ -101,6 +139,24 @@ fn main() -> ! {
         pins.gpio5.into_pull_up_input().into_dyn_pin(),
     ];
 
+    cortex_m::interrupt::free(|cs| {
+        G_ALARM0.borrow(cs).replace(Some(metr_alarm));
+        G_LED_PIN.borrow(cs).replace(Some(pin_led_metr));
+        G_TIMER.borrow(cs).replace(Some(timer));
+
+        let g_led_pin = &mut G_LED_PIN.borrow(cs).borrow_mut();
+        if let Some(led_pin) = g_led_pin.as_mut() {
+            // set led on for start
+            led_pin.set_high().unwrap();
+            G_IS_LED_HIGH.store(true, Ordering::Release);
+        }
+    });
+
+    #[allow(unsafe_code)]
+    unsafe {
+        pac::NVIC::unmask(pac::Interrupt::TIMER_IRQ_0);
+    }
+
     let mut menu = Menu::build("Menu")
         .add_item("Brightness", Brightness::High, |_| 1)
         .add_item("mer test", "!", |_| 2)
@@ -109,11 +165,14 @@ fn main() -> ! {
     let mut menu_visible = false;
     let mut last_buttons = Buttons::empty();
 
-    pin_led_metr.set_high();
+    let mut bpm: u32 = 120;
+    let mut metr_on = false;
+
+    let mut redraw = true;
 
     loop {
-        let mut redraw = false;
         let buttons = button_scan(&mut button_columns, &mut button_rows);
+        let shift = buttons.contains(Buttons::Back);
         match buttons.clone() & !last_buttons {
             Buttons::Menu => {
                 if !menu_visible {
@@ -143,19 +202,91 @@ fn main() -> ! {
                 } else {
                 }
             }
+            Buttons::MetTPlus => {
+                bpm = bpm.saturating_add(if shift { 10 } else { 1 });
+                redraw = true;
+            }
+            Buttons::MetTMinus => {
+                bpm = bpm.saturating_sub(if shift { 10 } else { 1 });
+                redraw = true;
+            }
+            Buttons::MetStart => {
+                metr_on = true;
+                cortex_m::interrupt::free(|cs| {
+                    let g_alarm0 = &mut G_ALARM0.borrow(cs).borrow_mut();
+                    if let Some(alarm0) = g_alarm0.as_mut() {
+                        alarm0.schedule(MicrosDurationU32::micros(0)).unwrap();
+                        alarm0.enable_interrupt();
+                    }
+                });
+            }
+            Buttons::MetStop => {
+                metr_on = false;
+                cortex_m::interrupt::free(|cs| {
+                    let g_alarm0 = &mut G_ALARM0.borrow(cs).borrow_mut();
+                    if let Some(alarm0) = g_alarm0.as_mut() {
+                        alarm0.clear_interrupt();
+                    }
+                });
+            }
             _ => {}
         }
         last_buttons = buttons;
 
+        let mut is_alarm_finished = false;
+        cortex_m::interrupt::free(|cs| {
+            let g_alarm0 = &mut G_ALARM0.borrow(cs).borrow_mut();
+            if let Some(alarm0) = g_alarm0.as_mut() {
+                is_alarm_finished = alarm0.finished();
+            }
+        });
+
+        if is_alarm_finished {
+            cortex_m::interrupt::free(|cs| {
+                let g_alarm0 = &mut G_ALARM0.borrow(cs).borrow_mut();
+                if let Some(alarm0) = g_alarm0.as_mut() && metr_on {
+                    const ON_TIME: MicrosDurationU32 = MicrosDurationU32::micros(30000);
+                    if G_IS_LED_HIGH.load(Ordering::Acquire) {
+                        alarm0.schedule(ON_TIME).unwrap();
+                    } else {
+                        alarm0
+                            .schedule(
+                                MicrosDurationU32::from_rate(Rate::<u32, 1, 60>::from_raw(bpm))
+                                    - ON_TIME,
+                            )
+                            .unwrap();
+                    }
+                    alarm0.enable_interrupt();
+                }
+            });
+        }
+
         if redraw {
+            redraw = false;
             if menu_visible {
                 menu.update(&display);
                 display.clear_buffer();
                 menu.draw(&mut display).unwrap();
                 display.flush();
+                pin_led_vlt.set_low();
             } else {
+                let mut buf = [0x20u8; 21];
+                let s = format_no_std::show(&mut buf, format_args!("{:0>3} BPM", bpm)).unwrap();
+
                 display.clear_buffer();
+                let bounding_box = display.bounding_box();
+                let character_style = MonoTextStyleBuilder::new()
+                    .font(&FONT_6X10)
+                    .text_color(BinaryColor::On)
+                    .build();
+                let left_aligned = TextStyleBuilder::new()
+                    .alignment(embedded_graphics::text::Alignment::Left)
+                    .baseline(embedded_graphics::text::Baseline::Top)
+                    .build();
+                Text::with_text_style(s, bounding_box.top_left, character_style, left_aligned)
+                    .draw(&mut display);
                 display.flush();
+                pin_led_vlt.set_high();
             }
         }
     }
@@ -256,4 +387,33 @@ fn button_down(
     let b = col.is_low();
     row.set_high();
     return b;
+}
+
+#[interrupt]
+fn TIMER_IRQ_0() {
+    static mut LED: Option<MetrLEDPinType> = None;
+
+    if LED.is_none() {
+        cortex_m::interrupt::free(|cs| {
+            *LED = G_LED_PIN.borrow(cs).take();
+        });
+    }
+
+    // switch led
+    if let Some(led) = LED {
+        let is_high = G_IS_LED_HIGH.load(Ordering::Acquire);
+        if is_high {
+            led.set_low().unwrap();
+        } else {
+            led.set_high().unwrap();
+        }
+        G_IS_LED_HIGH.store(!is_high, Ordering::Release);
+    }
+
+    cortex_m::interrupt::free(|cs| {
+        let g_alarm0 = &mut G_ALARM0.borrow(cs).borrow_mut();
+        if let Some(alarm0) = g_alarm0.as_mut() {
+            alarm0.clear_interrupt();
+        }
+    });
 }

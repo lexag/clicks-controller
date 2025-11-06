@@ -22,6 +22,7 @@ ssd1306 = "0.10.0"
 embedded-graphics = "0.8.1"
 embedded-menu = "0.6.1"
 bitflags = "2.10.0"
+format_no_std = "1.2.0"
 
 # this lets you use `cargo fix`!
 [[bin]]
