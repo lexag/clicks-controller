@@ -1,313 +1,167 @@
 #![no_std]
 #![no_main]
 
+mod buttons;
+mod graphics;
+mod led;
 mod menu;
+mod metronome;
+mod network2;
+mod state;
 
-use cortex_m_rt::entry;
 use defmt_rtt as _;
-use embedded_hal::digital::v2::{InputPin, OutputPin};
 use panic_probe as _;
-use rp2040_hal::{
-    self as hal,
-    fugit::{MicrosDurationU32, Rate},
-    gpio::{
-        bank0::{Gpio10, Gpio25},
-        DynFunction, DynPinId, DynPullType, Function, FunctionPwm, FunctionSioOutput, PullDown,
-        PullNone,
-    },
-    timer::{Alarm, Alarm0},
+
+use crate::{
+    buttons::{ButtonController, Buttons},
+    graphics::{GraphicsController, ScreenElement},
+    led::{LEDController, LED},
+    metronome::MetronomeController,
+    state::SystemState,
 };
-
-use bitflags::bitflags;
-use core::{
-    cell::RefCell,
-    sync::atomic::{AtomicBool, Ordering},
+use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
+use embassy_executor::Spawner;
+use embassy_net_wiznet::{chip::W5500, State};
+use embassy_rp::{
+    bind_interrupts,
+    config::Config,
+    gpio::{Input, Level, Output, Pull},
+    i2c::{self, I2c, InterruptHandler},
+    peripherals::{I2C0, I2C1, SPI0},
+    spi::{self, Async},
+    spinlock_mutex::SpinlockRawMutex,
 };
-use cortex_m::interrupt::Mutex;
-use embedded_graphics::{
-    image::{Image, ImageRaw},
-    mono_font::{
-        ascii::{FONT_6X10, FONT_8X13},
-        MonoTextStyleBuilder,
-    },
-    pixelcolor::BinaryColor,
-    prelude::Dimensions,
-    text::{Text, TextStyleBuilder},
-};
-use embedded_graphics::{prelude::Size, Drawable};
-use embedded_menu::{
-    interaction::{Action, Interaction, Navigation},
-    Menu, SelectValue,
-};
-use embedded_time::duration::Microseconds;
-use hal::{
-    clocks::{init_clocks_and_plls, Clock},
-    gpio::Pin,
-    pac,
-    pac::interrupt,
-    sio::Sio,
-    watchdog::Watchdog,
-};
-use ssd1306::{
-    mode::{BufferedGraphicsMode, DisplayConfig},
-    size::DisplaySize128x64,
-};
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
+use embassy_time::Timer;
+use embedded_menu::SelectValue;
 
-#[unsafe(link_section = ".boot2")]
-#[used]
-pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_W25Q080;
+static STATE: Mutex<CriticalSectionRawMutex, Option<SystemState>> =
+    Mutex::new(Some(SystemState::new()));
+static LED_CONTROLLER: Mutex<CriticalSectionRawMutex, Option<LEDController>> = Mutex::new(None);
+static BUTTON_CONTROLLER: Mutex<CriticalSectionRawMutex, Option<ButtonController>> =
+    Mutex::new(None);
+static METRONOME_CONTROLLER: Mutex<CriticalSectionRawMutex, Option<MetronomeController>> =
+    Mutex::new(None);
+static GRAPHICS_CONTROLLER: Mutex<CriticalSectionRawMutex, Option<GraphicsController>> =
+    Mutex::new(None);
 
-type MetrLEDPinType = Pin<Gpio10, FunctionSioOutput, PullDown>;
+bind_interrupts!(struct Irqs {
+    I2C1_IRQ => InterruptHandler<I2C1>;
+});
 
-static G_ALARM0: Mutex<RefCell<Option<Alarm0>>> = Mutex::new(RefCell::new(None));
-static G_LED_PIN: Mutex<RefCell<Option<MetrLEDPinType>>> = Mutex::new(RefCell::new(None));
-static G_IS_LED_HIGH: AtomicBool = AtomicBool::new(false);
-static G_TIMER: Mutex<RefCell<Option<hal::Timer>>> = Mutex::new(RefCell::new(None));
+#[embassy_executor::main]
+async fn main(spawner: Spawner) {
+    let mut config = Config::default();
+    let mut p = embassy_rp::init(config);
 
-#[entry]
-fn main() -> ! {
-    let mut pac = pac::Peripherals::take().unwrap();
-    let core = pac::CorePeripherals::take().unwrap();
-    let mut watchdog = Watchdog::new(pac.WATCHDOG);
-    let sio = Sio::new(pac.SIO);
+    let mut spi_config = spi::Config::default();
+    spi_config.frequency = 20_000_000;
 
-    let external_xtal_freq_hz = 12_000_000u32;
-    let clocks = init_clocks_and_plls(
-        external_xtal_freq_hz,
-        pac.XOSC,
-        pac.CLOCKS,
-        pac.PLL_SYS,
-        pac.PLL_USB,
-        &mut pac.RESETS,
-        &mut watchdog,
-    )
-    .ok()
-    .unwrap();
+    let sclk = p.PIN_18.reborrow();
+    let miso = p.PIN_16.reborrow();
+    let mosi = p.PIN_19.reborrow();
+    let cs = Output::new(p.PIN_17.reborrow(), Level::High);
+    let int = Input::new(p.PIN_21.reborrow(), Pull::Up);
+    let rst = Output::new(p.PIN_20.reborrow(), Level::Low);
 
-    let mut timer = rp2040_hal::Timer::new(pac.TIMER, &mut pac.RESETS, &clocks);
-    let mut metr_alarm = timer.alarm_0().unwrap();
-
-    let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
-
-    let pins = hal::gpio::Pins::new(
-        pac.IO_BANK0,
-        pac.PADS_BANK0,
-        sio.gpio_bank0,
-        &mut pac.RESETS,
+    let spi_bus = spi::Spi::new(
+        p.SPI0.reborrow(),
+        sclk,
+        mosi,
+        miso,
+        p.DMA_CH0.reborrow(),
+        p.DMA_CH1.reborrow(),
+        spi_config,
     );
 
-    let sda_pin: hal::gpio::Pin<_, hal::gpio::FunctionI2C, _> = pins.gpio26.reconfigure();
-    let scl_pin: hal::gpio::Pin<_, hal::gpio::FunctionI2C, _> = pins.gpio27.reconfigure();
+    let spi_mutex: Mutex<SpinlockRawMutex<1>, spi::Spi<'_, SPI0, Async>> = Mutex::new(spi_bus);
 
-    let mut i2c = hal::I2C::i2c1(
-        pac.I2C1,
-        sda_pin,
-        scl_pin, // Try `not_an_scl_pin` here
-        hal::fugit::Rate::<u32, 1, 1>::kHz(400),
-        &mut pac.RESETS,
-        &clocks.system_clock,
-    );
+    let spi_device = SpiDevice::new(&spi_mutex, cs);
 
-    let interface = ssd1306::I2CDisplayInterface::new(i2c);
-    let mut display = ssd1306::Ssd1306::new(
-        interface,
-        ssd1306::size::DisplaySize128x64,
-        ssd1306::rotation::DisplayRotation::Rotate0,
-    )
-    .into_buffered_graphics_mode();
-    display.init().unwrap();
+    let mut wiznet_state: embassy_net_wiznet::State<2, 2> = State::new();
+    embassy_net_wiznet::new::<
+        2,
+        2,
+        W5500,
+        embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice<
+            '_,
+            SpinlockRawMutex<1>,
+            embassy_rp::spi::Spi<'_, SPI0, embassy_rp::spi::Async>,
+            Output<'_>,
+        >,
+        Input<'_>,
+        Output<'_>,
+    >([0x0; 6], &mut wiznet_state, spi_device, int, rst);
 
-    let mut pin_led_metr: MetrLEDPinType = pins.gpio10.into_push_pull_output();
-    let mut pin_led_conn = pins.gpio11.into_push_pull_output().into_dyn_pin();
-    let mut pin_led_play = pins.gpio12.into_push_pull_output().into_dyn_pin();
-    let mut pin_led_vlt = pins.gpio13.into_push_pull_output().into_dyn_pin();
+    let i2c_config = i2c::Config::default();
+    let i2c = I2c::new_async(p.I2C1, p.PIN_27, p.PIN_26, Irqs, i2c_config);
 
-    pin_led_metr.set_low();
+    {
+        let mut btnc = BUTTON_CONTROLLER.lock().await;
+        btnc.replace(ButtonController::new(
+            p.PIN_2, p.PIN_3, p.PIN_4, p.PIN_5, p.PIN_6, p.PIN_7, p.PIN_8,
+        ));
 
-    let mut button_rows = [
-        pins.gpio6.into_push_pull_output().into_dyn_pin(),
-        pins.gpio7.into_push_pull_output().into_dyn_pin(),
-        pins.gpio8.into_push_pull_output().into_dyn_pin(),
-    ];
-    for pin in &mut button_rows {
-        pin.set_high();
-    }
-    let mut button_columns = [
-        pins.gpio2.into_pull_up_input().into_dyn_pin(),
-        pins.gpio3.into_pull_up_input().into_dyn_pin(),
-        pins.gpio4.into_pull_up_input().into_dyn_pin(),
-        pins.gpio5.into_pull_up_input().into_dyn_pin(),
-    ];
+        let mut ledc = LED_CONTROLLER.lock().await;
+        ledc.replace(LEDController::new(p.PIN_10, p.PIN_11, p.PIN_12, p.PIN_13));
 
-    cortex_m::interrupt::free(|cs| {
-        G_ALARM0.borrow(cs).replace(Some(metr_alarm));
-        G_LED_PIN.borrow(cs).replace(Some(pin_led_metr));
-        G_TIMER.borrow(cs).replace(Some(timer));
+        let mut metc = METRONOME_CONTROLLER.lock().await;
+        metc.replace(MetronomeController::new());
 
-        let g_led_pin = &mut G_LED_PIN.borrow(cs).borrow_mut();
-        if let Some(led_pin) = g_led_pin.as_mut() {
-            // set led on for start
-            led_pin.set_high().unwrap();
-            G_IS_LED_HIGH.store(true, Ordering::Release);
-        }
-    });
-
-    #[allow(unsafe_code)]
-    unsafe {
-        pac::NVIC::unmask(pac::Interrupt::TIMER_IRQ_0);
+        let mut gfxc = GRAPHICS_CONTROLLER.lock().await;
+        gfxc.replace(GraphicsController::new(i2c));
     }
 
-    let mut menu = Menu::build("Menu")
-        .add_item("Brightness", Brightness::High, |_| 1)
-        .add_item("mer test", "!", |_| 2)
-        .build();
+    redraw(ScreenElement::Logo).await;
+    Timer::after_secs(1).await;
+    redraw(ScreenElement::empty()).await;
+    redraw(ScreenElement::Main).await;
 
-    let mut menu_visible = false;
-    let mut last_buttons = Buttons::empty();
+    debug_flash().await;
 
-    let mut bpm: u32 = 120;
-    let mut metr_on = false;
-
-    let mut redraw = true;
+    spawner.spawn(init_metronome()).unwrap();
+    spawner.spawn(init_buttons()).unwrap();
 
     loop {
-        let buttons = button_scan(&mut button_columns, &mut button_rows);
-        let shift = buttons.contains(Buttons::Back);
-        match buttons.clone() & !last_buttons {
-            Buttons::Menu => {
-                if !menu_visible {
-                    menu_visible = true;
-                } else {
-                    menu.interact(Interaction::Action(Action::Select));
-                }
-                redraw = true;
-            }
-            Buttons::Back => {
-                if menu_visible {
-                    menu_visible = false;
-                    redraw = true;
-                }
-            }
-            Buttons::Next => {
-                if menu_visible {
-                    menu.interact(Interaction::Navigation(Navigation::Next));
-                    redraw = true;
-                } else {
-                }
-            }
-            Buttons::Prev => {
-                if menu_visible {
-                    menu.interact(Interaction::Navigation(Navigation::Previous));
-                    redraw = true;
-                } else {
-                }
-            }
-            Buttons::MetTPlus => {
-                bpm = bpm.saturating_add(if shift { 10 } else { 1 });
-                redraw = true;
-            }
-            Buttons::MetTMinus => {
-                bpm = bpm.saturating_sub(if shift { 10 } else { 1 });
-                redraw = true;
-            }
-            Buttons::MetStart => {
-                metr_on = true;
-                cortex_m::interrupt::free(|cs| {
-                    let g_alarm0 = &mut G_ALARM0.borrow(cs).borrow_mut();
-                    if let Some(alarm0) = g_alarm0.as_mut() {
-                        alarm0.schedule(MicrosDurationU32::micros(0)).unwrap();
-                        alarm0.enable_interrupt();
-                    }
-                });
-            }
-            Buttons::MetStop => {
-                metr_on = false;
-                cortex_m::interrupt::free(|cs| {
-                    let g_alarm0 = &mut G_ALARM0.borrow(cs).borrow_mut();
-                    if let Some(alarm0) = g_alarm0.as_mut() {
-                        alarm0.clear_interrupt();
-                    }
-                });
-            }
-            _ => {}
-        }
-        last_buttons = buttons;
-
-        let mut is_alarm_finished = false;
-        cortex_m::interrupt::free(|cs| {
-            let g_alarm0 = &mut G_ALARM0.borrow(cs).borrow_mut();
-            if let Some(alarm0) = g_alarm0.as_mut() {
-                is_alarm_finished = alarm0.finished();
-            }
-        });
-
-        if is_alarm_finished {
-            cortex_m::interrupt::free(|cs| {
-                let g_alarm0 = &mut G_ALARM0.borrow(cs).borrow_mut();
-                if let Some(alarm0) = g_alarm0.as_mut() && metr_on {
-                    const ON_TIME: MicrosDurationU32 = MicrosDurationU32::micros(30000);
-                    if G_IS_LED_HIGH.load(Ordering::Acquire) {
-                        alarm0.schedule(ON_TIME).unwrap();
-                    } else {
-                        alarm0
-                            .schedule(
-                                MicrosDurationU32::from_rate(Rate::<u32, 1, 60>::from_raw(bpm))
-                                    - ON_TIME,
-                            )
-                            .unwrap();
-                    }
-                    alarm0.enable_interrupt();
-                }
-            });
-        }
-
-        if redraw {
-            redraw = false;
-            if menu_visible {
-                menu.update(&display);
-                display.clear_buffer();
-                menu.draw(&mut display).unwrap();
-                display.flush();
-                pin_led_vlt.set_low();
-            } else {
-                let mut buf = [0x20u8; 21];
-                let s = format_no_std::show(&mut buf, format_args!("{:0>3} BPM", bpm)).unwrap();
-
-                display.clear_buffer();
-                let bounding_box = display.bounding_box();
-                let character_style = MonoTextStyleBuilder::new()
-                    .font(&FONT_6X10)
-                    .text_color(BinaryColor::On)
-                    .build();
-                let left_aligned = TextStyleBuilder::new()
-                    .alignment(embedded_graphics::text::Alignment::Left)
-                    .baseline(embedded_graphics::text::Baseline::Top)
-                    .build();
-                Text::with_text_style(s, bounding_box.top_left, character_style, left_aligned)
-                    .draw(&mut display);
-                display.flush();
-                pin_led_vlt.set_high();
-            }
-        }
+        Timer::after_secs(1).await;
     }
-}
 
-bitflags! {
-    #[derive(PartialEq, Clone)]
-    pub struct Buttons: u16 {
-    const MetStart = 0x01;
-    const MetStop = 0x02;
-    const Back = 0x04;
-    const Menu = 0x08;
-    const MetTPlus = 0x10;
-    const MetTMinus = 0x20;
-    const MetBPlus = 0x40;
-    const MetBMinus = 0x80;
-    const Next = 0x100;
-    const Prev = 0x200;
-    const Stop = 0x400;
-    const Start = 0x800;
-    }
+    //let mut pin_led_metr: MetrLEDPinType = pins.gpio10.into_push_pull_output();
+    //let mut pin_led_conn = pins.gpio11.into_push_pull_output().into_dyn_pin();
+    //let mut pin_led_play = pins.gpio12.into_push_pull_output().into_dyn_pin();
+    //let mut pin_led_vlt = pins.gpio13.into_push_pull_output().into_dyn_pin();
+
+    //pin_led_metr.set_low();
+
+    //cortex_m::interrupt::free(|cs| {
+    //    G_ALARM0.borrow(cs).replace(Some(metr_alarm));
+    //    G_LED_PIN.borrow(cs).replace(Some(pin_led_metr));
+    //    G_TIMER.borrow(cs).replace(Some(timer));
+
+    //    let g_led_pin = &mut G_LED_PIN.borrow(cs).borrow_mut();
+    //    if let Some(led_pin) = g_led_pin.as_mut() {
+    //        // set led on for start
+    //        led_pin.set_high().unwrap();
+    //        G_IS_LED_HIGH.store(true, Ordering::Release);
+    //    }
+    //});
+
+    //#[allow(unsafe_code)]
+    //unsafe {
+    //    pac::NVIC::unmask(pac::Interrupt::TIMER_IRQ_0);
+    //}
+
+    //
+
+    //let mut menu = Menu::build("Menu")
+    //    .add_item("Brightness", Brightness::High, |_| 1)
+    //    .add_item("mer test", "!", |_| 2)
+    //    .build();
+
+    //let mut menu_visible = false;
+    //let mut last_buttons = Buttons::empty();
+
+    //let mut metr_on = false;
 }
 
 #[derive(Copy, Clone, PartialEq, SelectValue)]
@@ -317,103 +171,165 @@ enum Brightness {
     High,
 }
 
-fn button_scan(
-    cols: &mut [hal::gpio::Pin<hal::gpio::DynPinId, hal::gpio::FunctionSioInput, hal::gpio::PullUp>;
-             4],
-    rows: &mut [hal::gpio::Pin<hal::gpio::DynPinId, hal::gpio::FunctionSioOutput, hal::gpio::PullDown>;
-             3],
-) -> Buttons {
-    let mut buttons = Buttons::empty();
-    buttons.set(
-        Buttons::MetStart,
-        button_down(&mut cols[1], &mut rows[0]).is_ok_and(|b| b),
-    );
-    buttons.set(
-        Buttons::MetStop,
-        button_down(&mut cols[0], &mut rows[0]).is_ok_and(|b| b),
-    );
-    buttons.set(
-        Buttons::Back,
-        button_down(&mut cols[2], &mut rows[0]).is_ok_and(|b| b),
-    );
-    buttons.set(
-        Buttons::Menu,
-        button_down(&mut cols[3], &mut rows[0]).is_ok_and(|b| b),
-    );
-    buttons.set(
-        Buttons::MetTPlus,
-        button_down(&mut cols[0], &mut rows[1]).is_ok_and(|b| b),
-    );
-    buttons.set(
-        Buttons::MetTMinus,
-        button_down(&mut cols[0], &mut rows[2]).is_ok_and(|b| b),
-    );
-    buttons.set(
-        Buttons::MetBPlus,
-        button_down(&mut cols[1], &mut rows[1]).is_ok_and(|b| b),
-    );
-    buttons.set(
-        Buttons::MetBMinus,
-        button_down(&mut cols[1], &mut rows[2]).is_ok_and(|b| b),
-    );
-    buttons.set(
-        Buttons::Next,
-        button_down(&mut cols[2], &mut rows[1]).is_ok_and(|b| b),
-    );
-    buttons.set(
-        Buttons::Prev,
-        button_down(&mut cols[3], &mut rows[1]).is_ok_and(|b| b),
-    );
-    buttons.set(
-        Buttons::Stop,
-        button_down(&mut cols[2], &mut rows[2]).is_ok_and(|b| b),
-    );
-    buttons.set(
-        Buttons::Start,
-        button_down(&mut cols[3], &mut rows[2]).is_ok_and(|b| b),
-    );
-    buttons
+//#[interrupt]
+//fn TIMER_IRQ_0() {
+//    static mut LED: Option<MetrLEDPinType> = None;
+//
+//    if LED.is_none() {
+//        cortex_m::interrupt::free(|cs| {
+//            *LED = G_LED_PIN.borrow(cs).take();
+//        });
+//    }
+//
+//    // switch led
+//    if let Some(led) = LED {
+//        let is_high = G_IS_LED_HIGH.load(Ordering::Acquire);
+//        if is_high {
+//            led.set_low().unwrap();
+//        } else {
+//            led.set_high().unwrap();
+//        }
+//        G_IS_LED_HIGH.store(!is_high, Ordering::Release);
+//    }
+//
+//    cortex_m::interrupt::free(|cs| {
+//        let g_alarm0 = &mut G_ALARM0.borrow(cs).borrow_mut();
+//        if let Some(alarm0) = g_alarm0.as_mut() {
+//            alarm0.clear_interrupt();
+//        }
+//    });
+//}
+//
+//
+
+pub async fn debug_flash() {
+    let mut ledc = LED_CONTROLLER.lock().await;
+    ledc.as_mut()
+        .expect("pls")
+        .flash(LED::Connection, 500000)
+        .await;
 }
 
-fn button_down(
-    col: &mut hal::gpio::Pin<hal::gpio::DynPinId, hal::gpio::FunctionSioInput, hal::gpio::PullUp>,
-    row: &mut hal::gpio::Pin<
-        hal::gpio::DynPinId,
-        hal::gpio::FunctionSioOutput,
-        hal::gpio::PullDown,
-    >,
-) -> Result<bool, core::convert::Infallible> {
-    row.set_low();
-    let b = col.is_low();
-    row.set_high();
-    return b;
-}
+const BLINK_TIME_US: u64 = 50000;
 
-#[interrupt]
-fn TIMER_IRQ_0() {
-    static mut LED: Option<MetrLEDPinType> = None;
-
-    if LED.is_none() {
-        cortex_m::interrupt::free(|cs| {
-            *LED = G_LED_PIN.borrow(cs).take();
-        });
+#[embassy_executor::task]
+pub async fn init_metronome() {
+    {
+        let mut ledc = LED_CONTROLLER.lock().await;
+        ledc.as_mut().expect("pls").set(LED::Connection, true);
     }
+    loop {
+        let (bpm, enabled) = {
+            let mut metc = METRONOME_CONTROLLER.lock().await;
+            let metc = metc.as_mut().expect("pls");
+            (metc.bpm, metc.enabled)
+        };
 
-    // switch led
-    if let Some(led) = LED {
-        let is_high = G_IS_LED_HIGH.load(Ordering::Acquire);
-        if is_high {
-            led.set_low().unwrap();
+        if enabled {
+            {
+                let mut ledc = LED_CONTROLLER.lock().await;
+                ledc.as_mut()
+                    .expect("pls")
+                    .flash(LED::Metronome, BLINK_TIME_US)
+                    .await;
+            }
+            Timer::after_micros(60_000_000 / bpm as u64 - BLINK_TIME_US).await;
         } else {
-            led.set_high().unwrap();
+            Timer::after_micros(1000).await;
         }
-        G_IS_LED_HIGH.store(!is_high, Ordering::Release);
     }
+}
+pub async fn redraw(element: ScreenElement) {
+    let mut gfxc = GRAPHICS_CONTROLLER.lock().await;
+    gfxc.as_mut()
+        .expect("pls")
+        .redraw_screen_element(element)
+        .await;
+}
 
-    cortex_m::interrupt::free(|cs| {
-        let g_alarm0 = &mut G_ALARM0.borrow(cs).borrow_mut();
-        if let Some(alarm0) = g_alarm0.as_mut() {
-            alarm0.clear_interrupt();
+#[embassy_executor::task]
+pub async fn init_buttons() {
+    let mut last_buttons = Buttons::empty();
+    let mut menu_visible = false;
+    loop {
+        let buttons = {
+            let mut btnc = BUTTON_CONTROLLER.lock().await;
+            btnc.as_mut().expect("pls").button_scan()
+        };
+
+        let shift = buttons.contains(Buttons::Back);
+        match buttons.clone() & !last_buttons {
+            Buttons::Menu => {
+                if !menu_visible {
+                    menu_visible = true;
+                } else {
+                    //menu.interact(Interaction::Action(Action::Select));
+                }
+                redraw(ScreenElement::Menu).await;
+            }
+            Buttons::Back => {
+                if menu_visible {
+                    menu_visible = false;
+                    redraw(ScreenElement::Main).await;
+                }
+            }
+            Buttons::Next => {
+                if menu_visible {
+                    //menu.interact(Interaction::Navigation(Navigation::Next));
+                    redraw(ScreenElement::Menu).await;
+                } else {
+                    {
+                        let mut state = STATE.lock().await;
+                        let idx = state.as_ref().expect("pls").cue_idx;
+                        state.as_mut().expect("pls").cue_idx = idx.saturating_add(1);
+                    }
+                    redraw(ScreenElement::Cue).await;
+                }
+            }
+            Buttons::Prev => {
+                if menu_visible {
+                    //menu.interact(Interaction::Navigation(Navigation::Next));
+                    redraw(ScreenElement::Menu).await;
+                } else {
+                    {
+                        let mut state = STATE.lock().await;
+                        let idx = state.as_ref().expect("pls").cue_idx;
+                        state.as_mut().expect("pls").cue_idx =
+                            if shift { 0 } else { idx.saturating_sub(1) };
+                    }
+                    redraw(ScreenElement::Cue).await;
+                }
+            }
+            Buttons::MetTPlus => {
+                {
+                    let mut metc = METRONOME_CONTROLLER.lock().await;
+                    metc.as_mut()
+                        .expect("pls")
+                        .change_bpm(if shift { 10 } else { 1 });
+                }
+                redraw(ScreenElement::Bpm).await;
+            }
+            Buttons::MetTMinus => {
+                {
+                    let mut metc = METRONOME_CONTROLLER.lock().await;
+                    metc.as_mut()
+                        .expect("pls")
+                        .change_bpm(if shift { -10 } else { -1 });
+                }
+                redraw(ScreenElement::Bpm).await;
+            }
+            Buttons::MetStart => {
+                let mut metc = METRONOME_CONTROLLER.lock().await;
+                metc.as_mut().expect("pls").enabled = true
+            }
+            Buttons::MetStop => {
+                let mut metc = METRONOME_CONTROLLER.lock().await;
+                metc.as_mut().expect("pls").enabled = false
+            }
+            _ => {}
         }
-    });
+        last_buttons = buttons;
+
+        Timer::after_micros(50000).await;
+    }
 }
