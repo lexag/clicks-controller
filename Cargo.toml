@@ -20,7 +20,6 @@ panic-halt= "0.2.0"
 critical-section = "1.2"
 ssd1306 = "0.10.0"
 embedded-graphics = "0.8.1"
-embedded-menu = "0.6.1"
 bitflags = "2.10.0"
 format_no_std = "1.2.0"
 embassy-net = { version = "0.7.1", features = ["udp", "medium-ethernet", "tcp", "proto-ipv4", "dhcpv4"] }

@@ -1,41 +1,22 @@
-use bitflags::bitflags;
 use embassy_rp::{
     gpio::{Input, Level, Output, Pin, Pull},
     Peri,
 };
 
-bitflags! {
-    #[derive(PartialEq, Clone)]
-    pub struct Buttons: u16 {
-    const MetStart = 0x01;
-    const MetStop = 0x02;
-    const Back = 0x04;
-    const Menu = 0x08;
-    const MetTPlus = 0x10;
-    const MetTMinus = 0x20;
-    const MetBPlus = 0x40;
-    const MetBMinus = 0x80;
-    const Next = 0x100;
-    const Prev = 0x200;
-    const Stop = 0x400;
-    const Start = 0x800;
-    }
+pub struct ButtonScanner {
+    cols: [Input<'static>; 4],
+    rows: [Output<'static>; 3],
 }
 
-pub struct ButtonController<'a> {
-    cols: [Input<'a>; 4],
-    rows: [Output<'a>; 3],
-}
-
-impl<'a> ButtonController<'a> {
+impl ButtonScanner {
     pub fn new(
-        col1: Peri<'a, impl Pin>,
-        col2: Peri<'a, impl Pin>,
-        col3: Peri<'a, impl Pin>,
-        col4: Peri<'a, impl Pin>,
-        row1: Peri<'a, impl Pin>,
-        row2: Peri<'a, impl Pin>,
-        row3: Peri<'a, impl Pin>,
+        col1: Peri<'static, impl Pin>,
+        col2: Peri<'static, impl Pin>,
+        col3: Peri<'static, impl Pin>,
+        col4: Peri<'static, impl Pin>,
+        row1: Peri<'static, impl Pin>,
+        row2: Peri<'static, impl Pin>,
+        row3: Peri<'static, impl Pin>,
     ) -> Self {
         Self {
             cols: [
@@ -52,27 +33,72 @@ impl<'a> ButtonController<'a> {
         }
     }
 
-    pub fn button_scan(&mut self) -> Buttons {
-        let mut buttons = Buttons::empty();
-        buttons.set(Buttons::MetStart, self.button_down(1, 0));
-        buttons.set(Buttons::MetStop, self.button_down(0, 0));
-        buttons.set(Buttons::Back, self.button_down(2, 0));
-        buttons.set(Buttons::Menu, self.button_down(3, 0));
-        buttons.set(Buttons::MetTPlus, self.button_down(0, 1));
-        buttons.set(Buttons::MetTMinus, self.button_down(0, 2));
-        buttons.set(Buttons::MetBPlus, self.button_down(1, 1));
-        buttons.set(Buttons::MetBMinus, self.button_down(1, 2));
-        buttons.set(Buttons::Next, self.button_down(2, 1));
-        buttons.set(Buttons::Prev, self.button_down(3, 1));
-        buttons.set(Buttons::Stop, self.button_down(2, 2));
-        buttons.set(Buttons::Start, self.button_down(3, 2));
-        buttons
-    }
-
     fn button_down(&mut self, col: usize, row: usize) -> bool {
         self.rows[row].set_low();
         let b = self.cols[col].is_low();
         self.rows[row].set_high();
         return b;
+    }
+}
+
+use crate::events::ButtonEvent;
+use crate::events::ButtonId;
+use crate::BUTTON_CH;
+use embassy_time::Timer;
+
+#[embassy_executor::task]
+pub async fn button_scanner_task(mut scanner: ButtonScanner) {
+    let tx = BUTTON_CH.sender();
+
+    loop {
+        tx.send(ButtonEvent {
+            id: ButtonId::MetronomeStart,
+            pressed: scanner.button_down(1, 0),
+        });
+        tx.send(ButtonEvent {
+            id: ButtonId::MetronomeStop,
+            pressed: scanner.button_down(0, 0),
+        });
+        tx.send(ButtonEvent {
+            id: ButtonId::Shift,
+            pressed: scanner.button_down(2, 0),
+        });
+        tx.send(ButtonEvent {
+            id: ButtonId::Menu,
+            pressed: scanner.button_down(3, 0),
+        });
+        tx.send(ButtonEvent {
+            id: ButtonId::MetronomeTempoPlus,
+            pressed: scanner.button_down(0, 1),
+        });
+        tx.send(ButtonEvent {
+            id: ButtonId::MetronomeTempoMinus,
+            pressed: scanner.button_down(0, 2),
+        });
+        tx.send(ButtonEvent {
+            id: ButtonId::MetronomeBrightPlus,
+            pressed: scanner.button_down(1, 1),
+        });
+        tx.send(ButtonEvent {
+            id: ButtonId::MetronomeBrightMinus,
+            pressed: scanner.button_down(1, 2),
+        });
+        tx.send(ButtonEvent {
+            id: ButtonId::Next,
+            pressed: scanner.button_down(3, 1),
+        });
+        tx.send(ButtonEvent {
+            id: ButtonId::Previous,
+            pressed: scanner.button_down(2, 1),
+        });
+        tx.send(ButtonEvent {
+            id: ButtonId::Stop,
+            pressed: scanner.button_down(2, 2),
+        });
+        tx.send(ButtonEvent {
+            id: ButtonId::Start,
+            pressed: scanner.button_down(3, 2),
+        });
+        Timer::after_millis(50).await;
     }
 }
