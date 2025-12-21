@@ -55,5 +55,7 @@ pub enum Action {
     Confirm,
     Backspace,
     SeekCheckpoint,
-    // Extend as needed
+    DebugMessage {
+        msg: StaticString<32>,
+    }, // Extend as needed
 }

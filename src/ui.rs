@@ -61,6 +61,9 @@ pub async fn ui_task(mut gc: GraphicsController) {
                 state.text = value;
                 need_redraw = true;
             }
+            Action::DebugMessage { msg } => {
+                draw_debug_message(gcm, msg);
+            }
             _ => {}
         }
 
@@ -213,6 +216,19 @@ fn draw_textentry(gc: &mut GraphicsController, app: &mut SystemState, val: Stati
         ORIGIN,
         GraphicsController::CHAR_SMALL,
         val.len(),
+        GraphicsController::TL_ALIGN,
+    );
+
+    gc.commit();
+}
+
+fn draw_debug_message(gc: &mut GraphicsController, msg: StaticString<32>) {
+    gc.clear();
+    gc.text_strip(
+        msg.str(),
+        Point::new(0, 0),
+        GraphicsController::CHAR_SMALL,
+        msg.len(),
         GraphicsController::TL_ALIGN,
     );
 

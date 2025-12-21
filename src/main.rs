@@ -44,6 +44,7 @@ use embassy_sync::{
 use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
 //use embedded_hal_bus::spi::ExclusiveDevice;
+use common::mem::str::StaticString;
 use embassy_time::Timer;
 use static_cell::StaticCell;
 
