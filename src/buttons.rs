@@ -54,51 +54,63 @@ pub async fn button_scanner_task(mut scanner: ButtonScanner) {
         tx.send(ButtonEvent {
             id: ButtonId::MetronomeStart,
             pressed: scanner.button_down(1, 0),
-        });
+        })
+        .await;
         tx.send(ButtonEvent {
             id: ButtonId::MetronomeStop,
             pressed: scanner.button_down(0, 0),
-        });
+        })
+        .await;
         tx.send(ButtonEvent {
             id: ButtonId::Shift,
             pressed: scanner.button_down(2, 0),
-        });
+        })
+        .await;
         tx.send(ButtonEvent {
             id: ButtonId::Menu,
             pressed: scanner.button_down(3, 0),
-        });
+        })
+        .await;
         tx.send(ButtonEvent {
             id: ButtonId::MetronomeTempoPlus,
             pressed: scanner.button_down(0, 1),
-        });
+        })
+        .await;
         tx.send(ButtonEvent {
             id: ButtonId::MetronomeTempoMinus,
             pressed: scanner.button_down(0, 2),
-        });
+        })
+        .await;
         tx.send(ButtonEvent {
             id: ButtonId::MetronomeBrightPlus,
             pressed: scanner.button_down(1, 1),
-        });
+        })
+        .await;
         tx.send(ButtonEvent {
             id: ButtonId::MetronomeBrightMinus,
             pressed: scanner.button_down(1, 2),
-        });
+        })
+        .await;
         tx.send(ButtonEvent {
             id: ButtonId::Next,
             pressed: scanner.button_down(3, 1),
-        });
+        })
+        .await;
         tx.send(ButtonEvent {
             id: ButtonId::Previous,
             pressed: scanner.button_down(2, 1),
-        });
+        })
+        .await;
         tx.send(ButtonEvent {
             id: ButtonId::Stop,
             pressed: scanner.button_down(2, 2),
-        });
+        })
+        .await;
         tx.send(ButtonEvent {
             id: ButtonId::Start,
             pressed: scanner.button_down(3, 2),
-        });
+        })
+        .await;
         Timer::after_millis(50).await;
     }
 }

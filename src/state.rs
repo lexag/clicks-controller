@@ -41,6 +41,10 @@ impl<T: Clone> TrackedValue<T> {
             None
         }
     }
+
+    pub fn peek(&self) -> T {
+        self.value.clone()
+    }
 }
 
 #[derive(Clone, Default)]

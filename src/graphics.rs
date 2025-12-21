@@ -131,7 +131,7 @@ impl GraphicsController {
                 .stroke_alignment(embedded_graphics::primitives::StrokeAlignment::Inside);
         }
 
-        &Rectangle::new(origin, size).draw_styled(&style.build(), &mut self.display);
+        let _ = &Rectangle::new(origin, size).draw_styled(&style.build(), &mut self.display);
     }
 
     pub fn x6_dot(&mut self, origin: Point, width: u32) {
@@ -146,15 +146,25 @@ impl GraphicsController {
     }
 
     pub fn list_item(&mut self, label: &str, value: Option<&str>, origin: Point, highlight: bool) {
-        self.rect(
-            origin,
-            Size::new(120, 14),
-            Some(BinaryColor::Off),
-            Some(BinaryColor::On),
-        );
+        //self.rect(origin, Size::new(120, 14), Some(BinaryColor::On), None);
+        //self.rect(
+        //    origin + Size::new(1, 1),
+        //    Size::new(120, 12),
+        //    Some(BinaryColor::Off),
+        //    None,
+        //);
+        if highlight {
+            self.text_strip(
+                ">",
+                origin + Size::new(0, 2),
+                Self::CHAR_SMALL,
+                1,
+                Self::TL_ALIGN,
+            );
+        }
         self.text_strip(
             label,
-            origin + Size::new(3, 2),
+            origin + Size::new(10, 2),
             Self::CHAR_SMALL,
             label.len().min(19),
             Self::TL_ALIGN,
@@ -162,10 +172,10 @@ impl GraphicsController {
         if let Some(right_text) = value {
             self.text_strip(
                 right_text,
-                origin + Size::new(69, 2),
+                origin + Size::new(120, 2),
                 Self::CHAR_SMALL,
-                right_text.len().min(8),
-                Self::TL_ALIGN,
+                right_text.len(),
+                Self::TR_ALIGN,
             );
         }
     }

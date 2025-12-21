@@ -20,10 +20,7 @@ use panic_probe as _;
 use crate::{
     buttons::{button_scanner_task, ButtonScanner},
     events::{Action, ButtonEvent, Mode},
-    fsm::FSM,
-    graphics::{GraphicsController, ScreenElement},
-    led::{LEDController, LED},
-    metronome::MetronomeController,
+    graphics::GraphicsController,
     state::SystemState,
     translator::input_translator_task,
     ui::ui_task,
@@ -34,9 +31,8 @@ use embassy_rp::{
     config::Config,
     gpio::{Input, Level, Output, Pull},
     i2c::{self, I2c, InterruptHandler},
-    peripherals::{I2C1, SPI0},
+    peripherals::I2C1,
     spi::{self, Async, Spi},
-    spinlock_mutex::SpinlockRawMutex,
 };
 use embassy_sync::{
     blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex},
@@ -47,6 +43,7 @@ use embassy_sync::{
 use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
 //use embedded_hal_bus::spi::ExclusiveDevice;
+use embassy_time::Timer;
 use static_cell::StaticCell;
 
 // Button events from scanner → translator
@@ -125,22 +122,22 @@ async fn main(spawner: Spawner) -> () {
     let i2c_config = i2c::Config::default();
     let i2c = I2c::new_async(p.I2C1, p.PIN_27, p.PIN_26, Irqs, i2c_config);
 
-    //ACTION_SRC.send(Action::ModeChange(Mode::Lock)).await;
-    //Timer::after_secs(1).await;
-    //ACTION_SRC.send(Action::ModeChange(Mode::Main)).await;
-
     let mut o = Output::new(p.PIN_10.reborrow(), Level::Low);
 
-    spawner.spawn(network::ethernet_task(spi));
-    spawner.spawn(ui_task(GraphicsController::new(i2c)));
-    spawner.spawn(input_translator_task());
-    spawner.spawn(action_fanout_task());
-    spawner.spawn(button_scanner_task(ButtonScanner::new(
+    let _ = spawner.spawn(network::ethernet_task(spi));
+    let _ = spawner.spawn(ui_task(GraphicsController::new(i2c)));
+    let _ = spawner.spawn(input_translator_task());
+    let _ = spawner.spawn(action_fanout_task());
+    let _ = spawner.spawn(button_scanner_task(ButtonScanner::new(
         p.PIN_2, p.PIN_3, p.PIN_4, p.PIN_5, p.PIN_6, p.PIN_7, p.PIN_8,
     )));
+    loop {
+        Timer::after_millis(250).await;
+        o.toggle();
+    }
 }
 
-const BLINK_TIME_US: u64 = 50000;
+//const BLINK_TIME_US: u64 = 50000;
 
 //#[embassy_executor::task]
 //pub async fn init_metronome() {
