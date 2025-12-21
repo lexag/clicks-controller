@@ -1,5 +1,8 @@
-use crate::fsm::FSM;
-use common::{cue::Cue, event::EventTable, mem::network::IpAddress};
+use common::{
+    beat::Beat,
+    cue::CueMetadata,
+    mem::{network::IpAddress, str::StaticString},
+};
 
 #[derive(Clone, Copy, Default)]
 pub struct TrackedValue<T> {
@@ -42,10 +45,11 @@ impl<T: Clone> TrackedValue<T> {
 
 #[derive(Clone, Default)]
 pub struct SystemState {
-    pub cue: TrackedValue<Cue>,
+    pub cue_metadata: TrackedValue<CueMetadata>,
     pub cue_idx: TrackedValue<u16>,
     pub beat_idx: TrackedValue<u16>,
-    pub mark_idx: TrackedValue<u8>,
+    pub beat: TrackedValue<Beat>,
+    pub mark_label: TrackedValue<StaticString<8>>,
     pub core_ip: TrackedValue<IpAddress>,
     pub bpm: TrackedValue<u16>,
 }
@@ -53,10 +57,11 @@ pub struct SystemState {
 impl SystemState {
     pub const fn new() -> Self {
         Self {
-            cue: TrackedValue::new(Cue::empty()),
+            beat: TrackedValue::new(Beat::empty()),
+            cue_metadata: TrackedValue::new(CueMetadata::const_default()),
             beat_idx: TrackedValue::new(0),
             cue_idx: TrackedValue::new(0),
-            mark_idx: TrackedValue::new(255),
+            mark_label: TrackedValue::new(StaticString::empty()),
             core_ip: TrackedValue::new(IpAddress {
                 port: 0,
                 addr: [0, 0, 0, 0],

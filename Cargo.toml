@@ -5,35 +5,41 @@ name = "clicks-controller"
 version = "0.1.0"
 
 [dependencies]
-common = { git = "https://github.com/lexag/clicks-common.git", "branch" = "no-std" }
-#rp-pico = "0.9.0"
-cortex-m = "0.7.3"
-cortex-m-rt = "0.7.0"
+common = { git = "https://github.com/lexag/clicks-common.git", branch = "no-std" }
+#cortex-m = "0.7.7"
+#cortex-m-rt = "0.7.0"
 embedded-time = "0.12.0"
 panic-probe = { version = "0.3.0", features = ["print-defmt"] }
-#rp2040-hal = { version = "0.11.0", features=["rt", "critical-section-impl"] }
-#rp2040-boot2 = "0.2.0"
 defmt = "0.3.0"
 defmt-rtt = "0.3.0"
-embedded-hal ="0.2.5"
-panic-halt= "0.2.0"
+panic-halt = "0.2.0"
 critical-section = "1.2"
 ssd1306 = "0.10.0"
 embedded-graphics = "0.8.1"
 bitflags = "2.10.0"
 format_no_std = "1.2.0"
-embassy-net = { version = "0.7.1", features = ["udp", "medium-ethernet", "tcp", "proto-ipv4", "dhcpv4"] }
-embassy-net-wiznet = "0.2.1"
-embassy-rp = { version = "0.8.0", features = ["qspi-as-gpio", "rp2040", "time-driver", "critical-section-impl", "boot2-w25q080"] }
-embassy-time = "0.5.0"
-embassy-executor = { version = "0.9.1", features = ["arch-cortex-m", "executor-thread"] }
-embassy-futures = "0.1.2"
 static_cell = "2.1.1"
-embedded-hal-bus = "0.3.0"
-embedded-io-async = "0.7.0"
+#embedded-hal-bus = "0.3.0"
+#embedded-io-async = "0.7.0"
 portable-atomic = { version = "1.11.1", features = ["critical-section"] }
-embassy-embedded-hal = "0.5.0"
-embassy-sync = "0.7.2"
+postcard = "1.1.3"
+
+
+embassy-executor = { version = "0.9", features = ["arch-cortex-m", "executor-thread"] }
+embassy-rp       = { version = "0.9", features = ["rp2040", "critical-section-impl", "time-driver"] }
+embassy-sync     = "0.2"
+embassy-net      = { version = "0.7.1", features = ["udp","tcp","proto-ipv4","dhcpv4"] }
+#embassy-embedded-hal = "0.2"
+embassy-futures  = "0.1.2"
+
+cortex-m = "0.7"
+cortex-m-rt = "0.7"
+embassy-time = "0.5.0"
+#embassy-rp = "0.9.0"
+
+
+
+
 
 # this lets you use `cargo fix`!
 [[bin]]

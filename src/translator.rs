@@ -11,7 +11,7 @@ pub async fn input_translator_task() {
     let mut shift = false;
 
     loop {
-        let btn = rx_button.receive().await;
+        let btn = rx_button.recv().await;
         if btn.id == ButtonId::Shift {
             shift = btn.pressed;
         }

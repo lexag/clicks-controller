@@ -1,5 +1,5 @@
 use crate::textentry::TextEntryContext;
-use common::mem::str::String32;
+use common::mem::str::StaticString;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ButtonId {
@@ -42,15 +42,15 @@ pub enum Action {
     ModeChange(Mode),
     TextEntryStart {
         ctx: TextEntryContext,
-        initial_value: String32,
+        initial_value: StaticString<32>,
     },
     TextEntryUpdate {
         ctx: TextEntryContext,
-        value: String32,
+        value: StaticString<32>,
     },
     TextEntryComplete {
         ctx: TextEntryContext,
-        value: String32,
+        value: StaticString<32>,
     },
     Confirm,
     Escape,

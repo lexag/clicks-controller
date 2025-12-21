@@ -3,7 +3,7 @@ use crate::graphics::GraphicsController;
 use crate::state::SystemState;
 use crate::{STATE, UI_CH};
 use common::event::{Event, EventDescription};
-use common::mem::str::String8;
+use common::mem::str::StaticString;
 use defmt::*;
 use embassy_executor::task;
 use embedded_graphics::prelude::Point;
@@ -27,7 +27,7 @@ pub async fn ui_task(mut gc: GraphicsController) {
     redraw_full(&state, gcm).await;
 
     loop {
-        let action = rx.receive().await;
+        let action = rx.recv().await;
         let mut need_redraw = false;
 
         match action {
@@ -86,10 +86,10 @@ fn draw_main_bpm(gc: &mut GraphicsController, app: &mut SystemState) {
 fn draw_main_cue(gc: &mut GraphicsController, app: &mut SystemState) {
     let mut buf = [0u8; 40];
     let cue_idx = app.cue_idx.read_ref();
-    let cue = app.cue.read_ref();
+    let cue = app.cue_metadata.read_ref();
     let s = format_no_std::show(
         &mut buf,
-        format_args!("{: >3}:{: <32}", cue_idx, cue.metadata.name.str()),
+        format_args!("{: >3}:{: <32}", cue_idx, cue.name.str()),
     )
     .unwrap_or_default();
     gc.text_strip(
@@ -102,20 +102,9 @@ fn draw_main_cue(gc: &mut GraphicsController, app: &mut SystemState) {
 }
 
 fn draw_main_mark(gc: &mut GraphicsController, app: &mut SystemState) {
-    let mark_idx = app.mark_idx.read();
-    let mark_name = if mark_idx < 255 && let Some(Some(EventDescription::RehearsalMarkEvent { label })) = app
-        .cue
-        .read()
-        .events
-        .get(mark_idx)
-        .map(|e| e.event.as_ref().cloned())
-    {
-        label
-    } else {
-        String8::new("")
-    };
+    let mark_idx = app.mark_label.read();
     gc.text_strip(
-        mark_name.str(),
+        mark_idx.str(),
         Point::new(0, 11),
         GraphicsController::CHAR_LARGE,
         8,
@@ -123,16 +112,10 @@ fn draw_main_mark(gc: &mut GraphicsController, app: &mut SystemState) {
     );
 }
 
-
 fn draw_main_bar(gc: &mut GraphicsController, app: &mut SystemState) {
-    let cue = app.cue.read_ref();
-    let bar_number = cue.get_beat(app.beat_idx.read()).map_or(0, |b| b.bar_number);
     let mut buf = [0u8; 4];
-    let s = format_no_std::show(
-        &mut buf,
-        format_args!("{: >4}", bar_number),
-    )
-    .unwrap_or_default();
+    let s = format_no_std::show(&mut buf, format_args!("{: >4}", app.beat.read().bar_number))
+        .unwrap_or_default();
     gc.text_strip(
         s,
         Point::new(0, 33),

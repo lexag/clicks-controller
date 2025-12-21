@@ -8,7 +8,7 @@ mod graphics;
 mod led;
 mod menu;
 mod metronome;
-mod network2;
+mod network;
 mod state;
 mod textentry;
 mod translator;
@@ -28,23 +28,26 @@ use crate::{
     translator::input_translator_task,
     ui::ui_task,
 };
-use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
 use embassy_executor::Spawner;
-use embassy_net_wiznet::{chip::W5500, State};
 use embassy_rp::{
     bind_interrupts,
     config::Config,
     gpio::{Input, Level, Output, Pull},
     i2c::{self, I2c, InterruptHandler},
     peripherals::{I2C1, SPI0},
-    spi::{self, Async},
+    spi::{self, Async, Spi},
     spinlock_mutex::SpinlockRawMutex,
 };
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
-use embassy_time::Timer;
+use embassy_sync::{
+    blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex},
+    mutex::Mutex,
+};
+//use embassy_time::{Delay, Timer};
 
 use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
+//use embedded_hal_bus::spi::ExclusiveDevice;
+use static_cell::StaticCell;
 
 // Button events from scanner → translator
 pub static BUTTON_CH: Channel<CriticalSectionRawMutex, ButtonEvent, 8> = Channel::new();
@@ -68,36 +71,32 @@ bind_interrupts!(struct Irqs {
 });
 
 #[embassy_executor::main]
-async fn main(spawner: Spawner) {
+async fn main(spawner: Spawner) -> () {
     let mut config = Config::default();
     let mut p = embassy_rp::init(config);
 
     let mut spi_config = spi::Config::default();
     spi_config.frequency = 20_000_000;
 
-    let sclk = p.PIN_18.reborrow();
-    let miso = p.PIN_16.reborrow();
-    let mosi = p.PIN_19.reborrow();
-    let cs = Output::new(p.PIN_17.reborrow(), Level::High);
-    let int = Input::new(p.PIN_21.reborrow(), Pull::Up);
-    let rst = Output::new(p.PIN_20.reborrow(), Level::Low);
+    let sclk = p.PIN_18;
+    let miso = p.PIN_16;
+    let mosi = p.PIN_19;
+    let cs = Output::new(p.PIN_17, Level::High);
+    let int = Input::new(p.PIN_21, Pull::Up);
+    let rst = Output::new(p.PIN_20, Level::Low);
 
-    let spi_bus = spi::Spi::new(
-        p.SPI0.reborrow(),
-        sclk,
-        mosi,
-        miso,
-        p.DMA_CH0.reborrow(),
-        p.DMA_CH1.reborrow(),
-        spi_config,
-    );
+    let spi = spi::Spi::new_blocking(p.SPI0, sclk, mosi, miso, spi_config);
 
+    //static SPI_BUS: StaticCell<Mutex<NoopRawMutex, Spi<'static, SPI0, Async>>> = StaticCell::new();
+
+    //let spi_bus = SPI_BUS.init(Mutex::new(spi));
+    //let spi_dev = embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice::new(spi_bus, cs);
     //let spi_mutex: Mutex<SpinlockRawMutex<1>, spi::Spi<'_, SPI0, Async>> = Mutex::new(spi_bus);
 
     //let spi_device = SpiDevice::new(&spi_mutex, cs);
 
     //let mut wiznet_state: embassy_net_wiznet::State<2, 2> = State::new();
-    //embassy_net_wiznet::new::<
+    //spawner.spawn(embassy_net_wiznet::new::<
     //    2,
     //    2,
     //    W5500,
@@ -109,7 +108,7 @@ async fn main(spawner: Spawner) {
     //    >,
     //    Input<'_>,
     //    Output<'_>,
-    //>([0x0; 6], &mut wiznet_state, spi_device, int, rst);
+    //>([0x0; 6], &mut wiznet_state, spi_device, int, rst));
 
     //let mut ledc = LED_CONTROLLER.lock().await;
     //ledc.replace(LEDController::new(p.PIN_10, p.PIN_11, p.PIN_12, p.PIN_13));
@@ -117,30 +116,28 @@ async fn main(spawner: Spawner) {
     //let mut metc = METRONOME_CONTROLLER.lock().await;
     //metc.replace(MetronomeController::new());
 
+    let mac_addr = [0x02, 0x00, 0x00, 0x00, 0x00, 0x00];
+    static STATE: StaticCell<SystemState> = StaticCell::new();
+    let state = STATE.init(SystemState::new());
+
     MODE_SIGNAL.signal(Mode::Lock);
-    spawner
-        .spawn(button_scanner_task(ButtonScanner::new(
-            p.PIN_2, p.PIN_3, p.PIN_4, p.PIN_5, p.PIN_6, p.PIN_7, p.PIN_8,
-        )))
-        .unwrap();
-    spawner.spawn(input_translator_task()).unwrap();
-    spawner.spawn(action_fanout_task()).unwrap();
 
     let i2c_config = i2c::Config::default();
     let i2c = I2c::new_async(p.I2C1, p.PIN_27, p.PIN_26, Irqs, i2c_config);
-    spawner
-        .spawn(ui_task(GraphicsController::new(i2c)))
-        .unwrap();
 
-    ACTION_SRC.send(Action::ModeChange(Mode::Lock)).await;
-    Timer::after_secs(1).await;
-    ACTION_SRC.send(Action::ModeChange(Mode::Main)).await;
+    //ACTION_SRC.send(Action::ModeChange(Mode::Lock)).await;
+    //Timer::after_secs(1).await;
+    //ACTION_SRC.send(Action::ModeChange(Mode::Main)).await;
 
     let mut o = Output::new(p.PIN_10.reborrow(), Level::Low);
-    loop {
-        o.toggle();
-        Timer::after_millis(500).await;
-    }
+
+    spawner.spawn(network::ethernet_task(spi));
+    spawner.spawn(ui_task(GraphicsController::new(i2c)));
+    spawner.spawn(input_translator_task());
+    spawner.spawn(action_fanout_task());
+    spawner.spawn(button_scanner_task(ButtonScanner::new(
+        p.PIN_2, p.PIN_3, p.PIN_4, p.PIN_5, p.PIN_6, p.PIN_7, p.PIN_8,
+    )));
 }
 
 const BLINK_TIME_US: u64 = 50000;
@@ -303,7 +300,7 @@ pub async fn action_fanout_task() {
     let tx_led = LED_CH.sender();
 
     loop {
-        let action = rx.receive().await;
+        let action = rx.recv().await;
 
         // Non‑blocking sends so fanout isn't held up by slow consumer
         let _ = tx_playback.try_send(action);

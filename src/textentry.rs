@@ -1,5 +1,5 @@
 use crate::{events::Action, ACTION_SRC, MODE_SIGNAL, UX_CH};
-use common::mem::str::String32;
+use common::mem::str::StaticString;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TextEntryContext {
@@ -16,13 +16,13 @@ pub async fn text_entry_task() {
     loop {
         while MODE_SIGNAL.wait().await != crate::events::Mode::TextEntry {}
 
-        let mut buffer = String32::new("");
+        let mut buffer = StaticString::<32>::new("");
         let mut buffer_before = buffer.clone();
         let mut cursor = 0;
         let mut edit_context = TextEntryContext::Unknown;
 
         loop {
-            let action = rx.receive().await;
+            let action = rx.recv().await;
             match action {
                 Action::TextEntryStart { ctx, initial_value } => {
                     edit_context = ctx;
