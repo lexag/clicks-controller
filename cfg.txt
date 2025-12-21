@@ -1,0 +1,9 @@
+debug_assertions
+panic="abort"
+target_abi="eabi"
+target_arch="arm"
+target_endian="little"
+target_env=""
+target_os="none"
+target_pointer_width="32"
+target_vendor="unknown"
