@@ -303,7 +303,7 @@ pub async fn action_fanout_task() {
     let tx_led = LED_CH.sender();
 
     loop {
-        let action = rx.recv().await;
+        let action = rx.receive().await;
 
         // Non‑blocking sends so fanout isn't held up by slow consumer
         let _ = tx_playback.try_send(action);

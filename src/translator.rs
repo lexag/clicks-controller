@@ -12,7 +12,7 @@ pub async fn input_translator_task() {
     let mut shift = false;
 
     loop {
-        let maybe_action = match select(rx_button.recv(), ACTION_UPSTREAM.recv()).await {
+        let maybe_action = match select(rx_button.receive(), ACTION_UPSTREAM.receive()).await {
             Either::First(btn) => {
                 if btn.id == ButtonId::Shift {
                     shift = btn.pressed;

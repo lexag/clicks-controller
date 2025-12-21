@@ -29,7 +29,7 @@ pub async fn ui_task(mut gc: GraphicsController) {
     redraw_full(&state, gcm).await;
 
     loop {
-        let action = rx.recv().await;
+        let action = rx.receive().await;
         let mut need_redraw = false;
 
         match action {

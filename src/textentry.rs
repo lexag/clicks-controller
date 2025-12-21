@@ -24,7 +24,7 @@ pub async fn text_entry_task() {
         let mut edit_context = TextEntryContext::Unknown;
 
         loop {
-            let action = rx.recv().await;
+            let action = rx.receive().await;
             match action {
                 Action::TextEntryStart { ctx, initial_value } => {
                     edit_context = ctx;
