@@ -54,8 +54,8 @@ pub struct SystemState {
     pub beat_idx: TrackedValue<u16>,
     pub beat: TrackedValue<Beat>,
     pub mark_label: TrackedValue<StaticString<8>>,
-    pub core_ip: TrackedValue<IpAddress>,
     pub bpm: TrackedValue<u16>,
+    pub core_ip: IpAddress,
 }
 
 impl SystemState {
@@ -66,10 +66,10 @@ impl SystemState {
             beat_idx: TrackedValue::new(0),
             cue_idx: TrackedValue::new(0),
             mark_label: TrackedValue::new(StaticString::empty()),
-            core_ip: TrackedValue::new(IpAddress {
+            core_ip: IpAddress {
                 port: 0,
                 addr: [0, 0, 0, 0],
-            }),
+            },
             bpm: TrackedValue::new(120),
         }
     }

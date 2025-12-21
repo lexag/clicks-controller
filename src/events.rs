@@ -53,7 +53,6 @@ pub enum Action {
         value: StaticString<32>,
     },
     Confirm,
-    Escape,
     Backspace,
     SeekCheckpoint,
     // Extend as needed

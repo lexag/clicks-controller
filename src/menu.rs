@@ -25,22 +25,26 @@ pub fn items() -> [MenuItem; MENU_SIZE] {
             text: StaticString::new("Core port"),
             value: |state| {
                 let mut buf = [0u8; 8];
-                let s =
-                    format_no_std::show(&mut buf, format_args!("{:>5}", state.core_ip.peek().port))
-                        .unwrap_or_default();
+                let s = format_no_std::show(&mut buf, format_args!("{:>5}", state.core_ip.port))
+                    .unwrap_or_default();
                 StaticString::new(s)
             },
             exec: |_| {
                 Some(Action::TextEntryStart {
                     ctx: TextEntryContext::CorePort,
-                    initial_value: StaticString::empty(),
+                    initial_value: StaticString::new(""),
                 })
             },
         },
         MenuItem {
             text: StaticString::new("IP"),
-            value: |state| state.core_ip.peek().str_from_octets(),
-            exec: |_| None,
+            value: |state| state.core_ip.str_from_octets(),
+            exec: |_| {
+                Some(Action::TextEntryStart {
+                    ctx: TextEntryContext::CoreIPv4,
+                    initial_value: StaticString::new("192.168.1."),
+                })
+            },
         },
         MenuItem {
             text: StaticString::new("Menu"),

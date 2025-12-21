@@ -1,6 +1,7 @@
 use crate::events::{Action, ButtonId, Mode};
-use crate::{menu, ACTION_SRC, BUTTON_CH, MODE_SIGNAL, STATE};
+use crate::{menu, ACTION_SRC, ACTION_UPSTREAM, BUTTON_CH, MODE_SIGNAL, STATE};
 use embassy_executor::task;
+use embassy_futures::select::{select, Either};
 
 #[task]
 pub async fn input_translator_task() {
@@ -10,33 +11,39 @@ pub async fn input_translator_task() {
     let mut mode = Mode::Lock;
     let mut shift = false;
 
-    let mut selected_menu_idx: usize = 0;
     loop {
-        let btn = rx_button.recv().await;
-        if btn.id == ButtonId::Shift {
-            shift = btn.pressed;
-        }
+        let maybe_action = match select(rx_button.recv(), ACTION_UPSTREAM.recv()).await {
+            Either::First(btn) => {
+                if btn.id == ButtonId::Shift {
+                    shift = btn.pressed;
+                }
 
-        let maybe_action = action_lut(mode, shift, btn.id);
+                if btn.pressed {
+                    action_lut(mode, shift, btn.id)
+                } else {
+                    None
+                }
+            }
+            Either::Second(maybe_action) => Some(maybe_action),
+        };
 
-        if let Some(action) = maybe_action && btn.pressed {
+        if let Some(action) = maybe_action {
             match action {
-                Action::ModeChange(new_mode)  => {
+                Action::ModeChange(new_mode) => {
                     mode = new_mode;
-                },
-                Action::NextItem => {
-                    selected_menu_idx = selected_menu_idx.saturating_add(1);
                 }
-                Action::PreviousItem => {
-                    selected_menu_idx = selected_menu_idx.saturating_sub(1);
+                Action::TextEntryStart { .. } => {
+                    mode = Mode::TextEntry;
+                    action_tx.send(Action::ModeChange(mode)).await;
                 }
-                _ => {}}
+                _ => {}
+            }
 
+            MODE_SIGNAL.signal(mode);
             action_tx.send(action).await;
         }
     }
 }
-
 
 fn action_lut(mode: Mode, shift: bool, id: ButtonId) -> Option<Action> {
     match (mode, shift, id) {
@@ -52,13 +59,14 @@ fn action_lut(mode: Mode, shift: bool, id: ButtonId) -> Option<Action> {
         (Mode::Menu, false, ButtonId::Menu) => Some(Action::SelectItem),
         (Mode::Menu, true, ButtonId::Menu) => Some(Action::ModeChange(Mode::Main)),
         (Mode::TextEntry, false, ButtonId::Menu) => Some(Action::Confirm),
-        (Mode::TextEntry, true, ButtonId::Menu) => Some(Action::ModeChange(Mode::Main)),
+        (Mode::TextEntry, true, ButtonId::Menu) => Some(Action::ModeChange(Mode::Menu)),
         (Mode::TextEntry, false, ButtonId::MetronomeStop) => Some(Action::Character(b'1')),
         (Mode::TextEntry, false, ButtonId::MetronomeStart) => Some(Action::Character(b'2')),
         (Mode::TextEntry, false, ButtonId::MetronomeTempoPlus) => Some(Action::Character(b'3')),
         (Mode::TextEntry, false, ButtonId::MetronomeBrightPlus) => Some(Action::Character(b'4')),
         (Mode::TextEntry, false, ButtonId::MetronomeTempoMinus) => Some(Action::Character(b'5')),
         (Mode::TextEntry, false, ButtonId::MetronomeBrightMinus) => Some(Action::Character(b'6')),
+        (Mode::TextEntry, false, ButtonId::Previous) => Some(Action::Backspace),
         (Mode::TextEntry, true, ButtonId::MetronomeStop) => Some(Action::Character(b'7')),
         (Mode::TextEntry, true, ButtonId::MetronomeStart) => Some(Action::Character(b'8')),
         (Mode::TextEntry, true, ButtonId::MetronomeTempoPlus) => Some(Action::Character(b'9')),

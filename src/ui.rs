@@ -2,7 +2,7 @@ use crate::events::{Action, Mode};
 use crate::graphics::GraphicsController;
 use crate::menu::{self};
 use crate::state::SystemState;
-use crate::{STATE, UI_CH};
+use crate::{ACTION_UPSTREAM, STATE, UI_CH};
 use common::mem::str::StaticString;
 use embassy_executor::task;
 use embedded_graphics::pixelcolor::BinaryColor;
@@ -22,7 +22,7 @@ pub async fn ui_task(mut gc: GraphicsController) {
     let mut state = ViewState {
         mode: Mode::Lock,
         selected_index: 0,
-        text: StaticString::empty(),
+        text: StaticString::new("Unused text"),
     };
 
     let gcm = &mut gc;
@@ -41,9 +41,25 @@ pub async fn ui_task(mut gc: GraphicsController) {
                 state.selected_index = state.selected_index.saturating_sub(1);
                 need_redraw = true;
             }
+            Action::SelectItem => {
+                let app_state = STATE.lock().await;
+                if let Some(action) = (menu::get_item(state.selected_index).exec)(app_state.clone())
+                {
+                    drop(app_state);
+                    ACTION_UPSTREAM.send(action).await;
+                }
+            }
             Action::ModeChange(m) => {
                 state.mode = m;
                 redraw_full(&state, gcm).await;
+            }
+            Action::TextEntryStart { ctx, initial_value } => {
+                state.text = initial_value;
+                redraw_full(&state, gcm).await;
+            }
+            Action::TextEntryUpdate { ctx, value } => {
+                state.text = value;
+                need_redraw = true;
             }
             _ => {}
         }
@@ -68,15 +84,20 @@ async fn redraw_full(state: &ViewState, gc: &mut GraphicsController) {
         Mode::Menu => {
             draw_menu(gc, &mut app_state, state.selected_index);
         }
+        Mode::TextEntry => {
+            draw_textentry(gc, &mut app_state, state.text);
+        }
         _ => {}
     }
     gc.commit();
 }
 
 async fn redraw_partial(state: &ViewState, gc: &mut GraphicsController) {
-    let mut app_state = STATE.lock().await;
     if state.mode == Mode::Menu {
         redraw_full(state, gc).await
+    } else if state.mode == Mode::TextEntry {
+        let mut app_state = STATE.lock().await;
+        draw_textentry(gc, &mut app_state, state.text);
     }
 }
 
@@ -156,3 +177,44 @@ fn draw_menu(gc: &mut GraphicsController, app: &mut SystemState, start_idx: usiz
     gc.commit();
 }
 
+fn draw_textentry(gc: &mut GraphicsController, app: &mut SystemState, val: StaticString<32>) {
+    const ORIGIN: Point = Point::new(10, 32 - GraphicsController::CHAR_SMALL.height as i32 / 2);
+    gc.rect(
+        ORIGIN + Size::new(0, GraphicsController::CHAR_SMALL.height + 1),
+        Size::new(108, 2),
+        Some(BinaryColor::On),
+        None,
+    );
+
+    gc.clear();
+
+    gc.text_strip(
+        "Edit Value",
+        ORIGIN - Size::new(0, 20),
+        GraphicsController::CHAR_SMALL,
+        10,
+        GraphicsController::TL_ALIGN,
+    );
+
+    gc.text_strip(
+        "^",
+        ORIGIN
+            + Size::new(
+                val.len() as u32 * GraphicsController::CHAR_SMALL.width,
+                GraphicsController::CHAR_SMALL.height + 2,
+            ),
+        GraphicsController::CHAR_SMALL,
+        10,
+        GraphicsController::TL_ALIGN,
+    );
+
+    gc.text_strip(
+        val.str(),
+        ORIGIN,
+        GraphicsController::CHAR_SMALL,
+        val.len(),
+        GraphicsController::TL_ALIGN,
+    );
+
+    gc.commit();
+}

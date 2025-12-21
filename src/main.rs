@@ -22,6 +22,7 @@ use crate::{
     events::{Action, ButtonEvent, Mode},
     graphics::GraphicsController,
     state::SystemState,
+    textentry::text_entry_task,
     translator::input_translator_task,
     ui::ui_task,
 };
@@ -51,6 +52,8 @@ pub static BUTTON_CH: Channel<CriticalSectionRawMutex, ButtonEvent, 8> = Channel
 
 // Translator publishes actions here
 pub static ACTION_SRC: Channel<CriticalSectionRawMutex, Action, 8> = Channel::new();
+// Everyone else publishes actions here
+pub static ACTION_UPSTREAM: Channel<CriticalSectionRawMutex, Action, 8> = Channel::new();
 
 // Fan‑out destinations (subscribers)
 pub static CONTROL_CH: Channel<CriticalSectionRawMutex, Action, 8> = Channel::new();
@@ -127,10 +130,12 @@ async fn main(spawner: Spawner) -> () {
     let _ = spawner.spawn(network::ethernet_task(spi));
     let _ = spawner.spawn(ui_task(GraphicsController::new(i2c)));
     let _ = spawner.spawn(input_translator_task());
+    let _ = spawner.spawn(text_entry_task());
     let _ = spawner.spawn(action_fanout_task());
     let _ = spawner.spawn(button_scanner_task(ButtonScanner::new(
         p.PIN_2, p.PIN_3, p.PIN_4, p.PIN_5, p.PIN_6, p.PIN_7, p.PIN_8,
     )));
+
     loop {
         Timer::after_millis(250).await;
         o.toggle();

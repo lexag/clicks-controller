@@ -50,67 +50,30 @@ use embassy_time::Timer;
 pub async fn button_scanner_task(mut scanner: ButtonScanner) {
     let tx = BUTTON_CH.sender();
 
+    let mut last_buttons = [false; 12];
+
     loop {
-        tx.send(ButtonEvent {
-            id: ButtonId::MetronomeStart,
-            pressed: scanner.button_down(1, 0),
-        })
-        .await;
-        tx.send(ButtonEvent {
-            id: ButtonId::MetronomeStop,
-            pressed: scanner.button_down(0, 0),
-        })
-        .await;
-        tx.send(ButtonEvent {
-            id: ButtonId::Shift,
-            pressed: scanner.button_down(2, 0),
-        })
-        .await;
-        tx.send(ButtonEvent {
-            id: ButtonId::Menu,
-            pressed: scanner.button_down(3, 0),
-        })
-        .await;
-        tx.send(ButtonEvent {
-            id: ButtonId::MetronomeTempoPlus,
-            pressed: scanner.button_down(0, 1),
-        })
-        .await;
-        tx.send(ButtonEvent {
-            id: ButtonId::MetronomeTempoMinus,
-            pressed: scanner.button_down(0, 2),
-        })
-        .await;
-        tx.send(ButtonEvent {
-            id: ButtonId::MetronomeBrightPlus,
-            pressed: scanner.button_down(1, 1),
-        })
-        .await;
-        tx.send(ButtonEvent {
-            id: ButtonId::MetronomeBrightMinus,
-            pressed: scanner.button_down(1, 2),
-        })
-        .await;
-        tx.send(ButtonEvent {
-            id: ButtonId::Next,
-            pressed: scanner.button_down(3, 1),
-        })
-        .await;
-        tx.send(ButtonEvent {
-            id: ButtonId::Previous,
-            pressed: scanner.button_down(2, 1),
-        })
-        .await;
-        tx.send(ButtonEvent {
-            id: ButtonId::Stop,
-            pressed: scanner.button_down(2, 2),
-        })
-        .await;
-        tx.send(ButtonEvent {
-            id: ButtonId::Start,
-            pressed: scanner.button_down(3, 2),
-        })
-        .await;
+        for (i, id, x, y) in [
+            (0, ButtonId::MetronomeStart, 1, 0),
+            (1, ButtonId::MetronomeStop, 0, 0),
+            (2, ButtonId::Shift, 2, 0),
+            (3, ButtonId::Menu, 3, 0),
+            (4, ButtonId::MetronomeTempoPlus, 0, 1),
+            (5, ButtonId::MetronomeTempoMinus, 0, 2),
+            (6, ButtonId::MetronomeBrightPlus, 1, 1),
+            (7, ButtonId::MetronomeBrightMinus, 1, 2),
+            (8, ButtonId::Next, 3, 1),
+            (9, ButtonId::Previous, 2, 1),
+            (10, ButtonId::Stop, 2, 2),
+            (11, ButtonId::Start, 3, 2),
+        ] {
+            let pressed = scanner.button_down(x, y);
+            if pressed != last_buttons[i] {
+                last_buttons[i] = pressed;
+                tx.send(ButtonEvent { id, pressed }).await;
+            }
+        }
+
         Timer::after_millis(50).await;
     }
 }
