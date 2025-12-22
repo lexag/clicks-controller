@@ -5,6 +5,7 @@ use crate::state::SystemState;
 use crate::{ACTION_UPSTREAM, STATE, UI_CH};
 use common::mem::str::StaticString;
 use embassy_executor::task;
+use embassy_time::Timer;
 use embedded_graphics::pixelcolor::BinaryColor;
 use embedded_graphics::prelude::{Point, Size};
 
@@ -13,6 +14,15 @@ struct ViewState {
     mode: Mode,
     selected_index: usize,
     text: StaticString<32>,
+}
+
+pub async fn debug(s: &str) {
+    ACTION_UPSTREAM
+        .send(Action::DebugMessage {
+            msg: StaticString::new(s),
+        })
+        .await;
+    Timer::after_secs(1).await;
 }
 
 #[task]

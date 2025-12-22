@@ -64,15 +64,6 @@ const CORE_IP_ADDRESS: [u8; 4] = [192, 168, 1, 72];
 const CORE_PORT: [u8; 2] = [0x1f, 0x91];
 const GATEWAY_ADDRESS: [u8; 4] = [192, 168, 0, 1];
 
-async fn debug(s: &str) {
-    ACTION_UPSTREAM
-        .send(Action::DebugMessage {
-            msg: StaticString::new(s),
-        })
-        .await;
-    Timer::after_secs(1).await;
-}
-
 #[embassy_executor::task]
 pub async fn ethernet_task(mut spi: spi::Spi<'static, SPI0, Blocking>) {
     SpiW::runtime_tests().await;
