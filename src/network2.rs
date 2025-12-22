@@ -5,16 +5,26 @@
 //! Note: the W55RP20 is a single package that contains both a RP2040 and the Wiznet W5500 ethernet
 //! controller
 
-use crate::STATE;
-use common::mem::network::IpAddress;
+use crate::events::Action;
+use crate::ui::debug;
+use crate::{ACTION_UPSTREAM, CONTROL_CH, STATE};
+use common::mem::network::{IpAddress, SubscriberInfo};
+use common::mem::str::StaticString;
+use common::mem::typeflags::MessageType;
+use common::protocol::message::SmallMessage;
+use common::protocol::request::Request;
+use core::net::Ipv4Addr;
+use embassy_futures::select::{select, Either};
 use embassy_futures::yield_now;
-use embassy_net::Stack;
+use embassy_net::udp::{PacketMetadata, SendError, UdpMetadata, UdpSocket};
+use embassy_net::{IpEndpoint, Stack};
 use embassy_net_wiznet::chip::W5500;
 use embassy_net_wiznet::*;
 use embassy_rp::gpio::{Input, Output};
 use embassy_rp::peripherals::PIO0;
 use embassy_rp::spi::Async;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_time::Timer;
 
 pub type SpiType = embassy_rp::pio_programs::spi::Spi<'static, PIO0, 0, Async>;
 pub type SpiBusType = embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice<
@@ -47,47 +57,102 @@ async fn wait_for_config(stack: Stack<'static>) -> embassy_net::StaticConfigV4 {
 
 #[embassy_executor::task]
 pub async fn stack_task(stack: Stack<'static>) {
-    let cfg = wait_for_config(stack).await;
-    let local_addr = cfg.address.address();
+    loop {
+        let cfg = wait_for_config(stack).await;
 
-    let mut state = STATE.lock().await;
-    state.self_ip = IpAddress::new(cfg.address.address().octets(), 0);
+        let mut state = STATE.lock().await;
+        state.self_ip = IpAddress::new(cfg.address.address().octets(), 1234);
+        let self_ip = state.self_ip;
+        let endpoint = IpEndpoint::new(
+            embassy_net::IpAddress::Ipv4(Ipv4Addr::new(
+                state.core_ip.addr[0],
+                state.core_ip.addr[1],
+                state.core_ip.addr[2],
+                state.core_ip.addr[3],
+            )),
+            state.core_ip.port,
+        );
+        drop(state);
+        ACTION_UPSTREAM.send(Action::ForceRedraw).await;
 
-    let mut rx_buffer = [0; 4096];
-    let mut tx_buffer = [0; 4096];
+        let mut rx_buffer = [0; 4096];
+        let mut tx_buffer = [0; 4096];
+        let mut rx_meta = [PacketMetadata::EMPTY; 16];
+        let mut tx_meta = [PacketMetadata::EMPTY; 16];
+
+        let mut buf = [0; 4096];
+
+        let mut socket = UdpSocket::new(
+            stack,
+            &mut rx_meta,
+            &mut rx_buffer,
+            &mut tx_meta,
+            &mut tx_buffer,
+        );
+        socket.bind(1234).unwrap();
+
+        if send_request(
+            Request::Subscribe(SubscriberInfo {
+                identifier: StaticString::new("ClicKS Hardware Controller"),
+                address: self_ip,
+                message_kinds: MessageType::Heartbeat
+                    | MessageType::TransportData
+                    | MessageType::BeatData
+                    | MessageType::ShutdownOccured
+                    | MessageType::EventOccured,
+                last_contact: 0,
+            }),
+            endpoint,
+            &socket,
+        )
+        .await
+        .is_err()
+        {
+            loop {
+                if let Action::ReloadConnection = CONTROL_CH.receive().await {
+                    break;
+                }
+            }
+        } else {
+            loop {
+                buf.fill(0);
+                match select(socket.recv_from(&mut buf), CONTROL_CH.receive()).await {
+                    Either::First(Ok((n, _ep))) => {
+                        if let Ok(msg) = postcard::from_bytes(&buf[..n]) {
+                            receive_message(msg).await;
+                        }
+                    }
+                    Either::Second(action) => match action {
+                        Action::RequestToCore(request) => {
+                            let _ = send_request(request, endpoint, &socket).await;
+                        }
+                        Action::ReloadConnection => {
+                            break;
+                        }
+                        _ => {}
+                    },
+                    _ => {}
+                }
+            }
+        }
+
+        socket.close();
+    }
+}
+
+async fn receive_message(msg: SmallMessage) {
+    ACTION_UPSTREAM.send(Action::MessageFromCore(msg)).await;
+}
+
+async fn send_request(
+    req: Request,
+    endpoint: IpEndpoint,
+    socket: &UdpSocket<'_>,
+) -> Result<(), SendError> {
     let mut buf = [0; 4096];
-    return;
-    //loop {
-    //    let mut socket = embassy_net::tcp::TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
-    //    socket.set_timeout(Some(Duration::from_secs(10)));
-
-    //    led.set_low();
-    //    info!("Listening on TCP:1234...");
-    //    if let Err(e) = socket.accept(1234).await {
-    //        warn!("accept error: {:?}", e);
-    //        continue;
-    //    }
-    //    info!("Received connection from {:?}", socket.remote_endpoint());
-    //    led.set_high();
-
-    //    loop {
-    //        let n = match socket.read(&mut buf).await {
-    //            Ok(0) => {
-    //                warn!("read EOF");
-    //                break;
-    //            }
-    //            Ok(n) => n,
-    //            Err(e) => {
-    //                warn!("{:?}", e);
-    //                break;
-    //            }
-    //        };
-    //        info!("rxd {}", core::str::from_utf8(&buf[..n]).unwrap());
-
-    //        if let Err(e) = socket.write_all(&buf[..n]).await {
-    //            warn!("write error: {:?}", e);
-    //            break;
-    //        }
-    //    }
-    //}
+    if let Ok(send_buf) = postcard::to_slice(&req, &mut buf) {
+        socket.send_to(send_buf, endpoint).await
+    } else {
+        Err(SendError::PacketTooLarge)
+    }
 }

@@ -1,5 +1,8 @@
 use crate::textentry::TextEntryContext;
-use common::mem::str::StaticString;
+use common::{
+    mem::str::StaticString,
+    protocol::{message::SmallMessage, request::Request},
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ButtonId {
@@ -55,7 +58,11 @@ pub enum Action {
     Confirm,
     Backspace,
     SeekCheckpoint,
+    ForceRedraw,
     DebugMessage {
         msg: StaticString<32>,
-    }, // Extend as needed
+    },
+    ReloadConnection,
+    MessageFromCore(SmallMessage),
+    RequestToCore(Request),
 }

@@ -22,6 +22,11 @@ pub fn items() -> [MenuItem; MENU_SIZE] {
             exec: |_| Some(Action::ModeChange(Mode::Main)),
         },
         MenuItem {
+            text: StaticString::new("Refresh Connection"),
+            value: |_| StaticString::empty(),
+            exec: |_| Some(Action::ReloadConnection),
+        },
+        MenuItem {
             text: StaticString::new("Core port"),
             value: |state| {
                 let mut buf = [0u8; 8];
@@ -47,13 +52,8 @@ pub fn items() -> [MenuItem; MENU_SIZE] {
             },
         },
         MenuItem {
-            text: StaticString::new("Menu"),
-            value: |_| StaticString::empty(),
-            exec: |_| None,
-        },
-        MenuItem {
-            text: StaticString::new("Menu"),
-            value: |_| StaticString::empty(),
+            text: StaticString::new("Me"),
+            value: |state| state.self_ip.str_from_octets(),
             exec: |_| None,
         },
         MenuItem {

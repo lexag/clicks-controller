@@ -74,6 +74,7 @@ pub async fn ui_task(mut gc: GraphicsController) {
             Action::DebugMessage { msg } => {
                 draw_debug_message(gcm, msg);
             }
+            Action::ForceRedraw => redraw_full(&state, gcm).await,
             _ => {}
         }
 
