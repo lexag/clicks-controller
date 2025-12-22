@@ -1,4 +1,4 @@
-use crate::textentry::TextEntryContext;
+use crate::{led::LED, textentry::TextEntryContext};
 use common::{
     beat::Beat,
     cue::CueMetadata,
@@ -63,6 +63,7 @@ pub enum Action {
     SeekCheckpoint,
     ForceRedraw,
     NewBeatData(Beat),
+    NewBPM(u64),
     NewCueData(u16, CueMetadata),
     NewTransportData(TransportState),
     NewLabelData(StaticString<8>),
@@ -70,6 +71,16 @@ pub enum Action {
         msg: StaticString<32>,
     },
     ReloadConnection,
+    GainConnection,
+    LoseConnection,
     MessageFromCore(SmallMessage),
     RequestToCore(Request),
+    LEDSet(LED, bool),
+    LEDToggle(LED),
+    LEDBlip(LED),
+    MetronomeAddTempo(i64),
+    MetronomeSetTempo(i64),
+    MetronomeStop,
+    MetronomeStart,
+    MetronomeTempoTap,
 }

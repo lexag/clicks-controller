@@ -51,10 +51,8 @@ impl<T: Clone> TrackedValue<T> {
 pub struct SystemState {
     pub cue_metadata: CueMetadata,
     pub cue_idx: u16,
-    pub beat_idx: u16,
     pub beat: Beat,
     pub mark_label: StaticString<8>,
-    pub bpm: u16,
     pub core_ip: IpAddress,
     pub self_ip: IpAddress,
 }
@@ -62,9 +60,12 @@ pub struct SystemState {
 impl SystemState {
     pub const fn new() -> Self {
         Self {
-            beat: Beat::empty(),
+            beat: Beat {
+                length: 500000,
+                count: 1,
+                bar_number: 0,
+            },
             cue_metadata: CueMetadata::const_default(),
-            beat_idx: 0,
             cue_idx: 0,
             mark_label: StaticString::empty(),
             core_ip: IpAddress {
@@ -75,7 +76,6 @@ impl SystemState {
                 port: 0,
                 addr: [0, 0, 0, 0],
             },
-            bpm: 120,
         }
     }
 }

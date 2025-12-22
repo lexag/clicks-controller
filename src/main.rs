@@ -28,6 +28,8 @@ use crate::{
     buttons::{button_scanner_task, ButtonScanner},
     events::{Action, ButtonEvent, Mode},
     graphics::GraphicsController,
+    led::{led_task, LEDController},
+    metronome::metronome_task,
     state::SystemState,
     textentry::text_entry_task,
     translator::input_translator_task,
@@ -40,8 +42,8 @@ use embassy_rp::{
     config::Config,
     gpio::{Input, Level, Output, Pull},
     i2c::{self, I2c, InterruptHandler},
-    peripherals::{I2C1, PIO0},
-    pio,
+    peripherals::{I2C1, PIO0, PWM_SLICE0},
+    pio, pwm,
     spi::{self, Async, Spi},
 };
 use embassy_sync::{
@@ -56,7 +58,7 @@ use embassy_sync::{
 use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
 //use embedded_hal_bus::spi::ExclusiveDevice;
-use common::mem::str::StaticString;
+use common::{mem::str::StaticString, protocol::request::Request};
 use embassy_time::Timer;
 use static_cell::StaticCell;
 
@@ -77,6 +79,7 @@ pub static CONTROL_CH: Channel<CriticalSectionRawMutex, Action, 8> = Channel::ne
 pub static UI_CH: Channel<CriticalSectionRawMutex, Action, 8> = Channel::new();
 pub static UX_CH: Channel<CriticalSectionRawMutex, Action, 8> = Channel::new();
 pub static LED_CH: Channel<CriticalSectionRawMutex, Action, 8> = Channel::new();
+pub static METR_CH: Channel<CriticalSectionRawMutex, Action, 8> = Channel::new();
 
 // Signal for latest mode
 pub static MODE_SIGNAL: Signal<CriticalSectionRawMutex, Mode> = Signal::new();
@@ -222,20 +225,30 @@ async fn main(spawner: Spawner) -> () {
     let i2c_config = i2c::Config::default();
     let i2c = I2c::new_async(p.I2C1, p.PIN_27, p.PIN_26, Irqs, i2c_config);
 
-    let mut o = Output::new(p.PIN_10.reborrow(), Level::Low);
+    let pwm_config = pwm::Config::default();
 
     //   let _ = spawner.spawn(network2::ethernet_task(spi));
     let _ = spawner.spawn(ui_task(GraphicsController::new(i2c)));
     let _ = spawner.spawn(input_translator_task());
     let _ = spawner.spawn(text_entry_task());
     let _ = spawner.spawn(action_fanout_task());
+    let _ = spawner.spawn(led_task(
+        LEDController::new(
+            pwm::Pwm::new_output_ab(p.PWM_SLICE5, p.PIN_10, p.PIN_11, pwm_config.clone()),
+            pwm::Pwm::new_output_ab(p.PWM_SLICE6, p.PIN_12, p.PIN_13, pwm_config.clone()),
+        )
+        .await,
+    ));
     let _ = spawner.spawn(button_scanner_task(ButtonScanner::new(
         p.PIN_2, p.PIN_3, p.PIN_4, p.PIN_5, p.PIN_6, p.PIN_7, p.PIN_8,
     )));
+    let _ = spawner.spawn(metronome_task());
 
     loop {
-        Timer::after_millis(250).await;
-        o.toggle();
+        Timer::after_secs(600).await;
+        ACTION_UPSTREAM
+            .send(Action::RequestToCore(Request::Ping))
+            .await;
     }
 }
 
@@ -397,6 +410,7 @@ pub async fn action_fanout_task() {
     let tx_ui = UI_CH.sender();
     let tx_ux = UX_CH.sender();
     let tx_led = LED_CH.sender();
+    let tx_metr = METR_CH.sender();
 
     loop {
         let action = rx.receive().await;
@@ -406,5 +420,6 @@ pub async fn action_fanout_task() {
         let _ = tx_ui.try_send(action);
         let _ = tx_ux.try_send(action);
         let _ = tx_led.try_send(action);
+        let _ = tx_metr.try_send(action);
     }
 }

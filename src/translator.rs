@@ -1,6 +1,8 @@
 use crate::events::{Action, ButtonId, Mode};
 use crate::{menu, ACTION_SRC, ACTION_UPSTREAM, BUTTON_CH, MODE_SIGNAL, STATE};
+use common::event::JumpModeChange;
 use common::protocol::request::{ControlAction, Request};
+use cortex_m::register::control::Control;
 use embassy_executor::task;
 use embassy_futures::select::{select, Either};
 
@@ -11,6 +13,7 @@ pub async fn input_translator_task() {
 
     let mut mode = Mode::Lock;
     let mut shift = false;
+    let mut playing = false;
 
     loop {
         let maybe_action = match select(rx_button.receive(), ACTION_UPSTREAM.receive()).await {
@@ -20,7 +23,7 @@ pub async fn input_translator_task() {
                 }
 
                 if btn.pressed {
-                    action_lut(mode, shift, btn.id)
+                    action_lut(mode, shift, btn.id, playing)
                 } else {
                     None
                 }
@@ -37,6 +40,7 @@ pub async fn input_translator_task() {
                     mode = Mode::TextEntry;
                     action_tx.send(Action::ModeChange(mode)).await;
                 }
+                Action::NewTransportData(data) => playing = data.running,
                 _ => {}
             }
 
@@ -46,7 +50,7 @@ pub async fn input_translator_task() {
     }
 }
 
-fn action_lut(mode: Mode, shift: bool, id: ButtonId) -> Option<Action> {
+fn action_lut(mode: Mode, shift: bool, id: ButtonId, playing: bool) -> Option<Action> {
     match (mode, shift, id) {
         (Mode::Lock, _, ButtonId::Start) => None,
         (Mode::Lock, true, ButtonId::Stop) => Some(Action::ModeChange(Mode::Main)),
@@ -61,12 +65,24 @@ fn action_lut(mode: Mode, shift: bool, id: ButtonId) -> Option<Action> {
         (Mode::Main, true, ButtonId::Previous) => Some(Action::RequestToCore(
             Request::ControlAction(ControlAction::TransportZero),
         )),
-        (_, _, ButtonId::Start) => Some(Action::RequestToCore(Request::ControlAction(
-            ControlAction::TransportStart,
-        ))),
-        (_, false, ButtonId::Stop) => Some(Action::RequestToCore(Request::ControlAction(
+        (Mode::Main, _, ButtonId::Start) => {
+            Some(Action::RequestToCore(Request::ControlAction(if playing {
+                ControlAction::ChangeJumpMode(JumpModeChange::Toggle)
+            } else {
+                ControlAction::TransportStart
+            })))
+        }
+        (Mode::Main, false, ButtonId::Stop) => Some(Action::RequestToCore(Request::ControlAction(
             ControlAction::TransportStop,
         ))),
+        (Mode::Main, true, ButtonId::Stop) => Some(Action::ModeChange(Mode::Lock)),
+        (Mode::Main, false, ButtonId::MetronomeStop) => Some(Action::MetronomeStop),
+        (Mode::Main, false, ButtonId::MetronomeStart) => Some(Action::MetronomeStart),
+        (Mode::Main, false, ButtonId::MetronomeTempoPlus) => Some(Action::MetronomeAddTempo(1)),
+        (Mode::Main, false, ButtonId::MetronomeTempoMinus) => Some(Action::MetronomeAddTempo(-1)),
+        (Mode::Main, true, ButtonId::MetronomeStart) => Some(Action::MetronomeTempoTap),
+        (Mode::Main, true, ButtonId::MetronomeTempoPlus) => Some(Action::MetronomeAddTempo(10)),
+        (Mode::Main, true, ButtonId::MetronomeTempoMinus) => Some(Action::MetronomeAddTempo(-10)),
         (Mode::Menu, false, ButtonId::Next) => Some(Action::NextItem),
         (Mode::Menu, false, ButtonId::Previous) => Some(Action::PreviousItem),
         (Mode::Menu, false, ButtonId::Menu) => Some(Action::SelectItem),

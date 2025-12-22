@@ -83,11 +83,11 @@ pub async fn ui_task(mut gc: GraphicsController) {
             }
             (_, Action::ForceRedraw) => redraw_full(&state, gcm).await,
             (Mode::Main, Action::NewBeatData(beat)) => {
-                if state.mode != Mode::Lock {
-                    draw_main_bpm(gcm, beat.tempo());
+                draw_main_bpm(gcm, beat.tempo());
+                if beat.count == 1 {
                     draw_main_bar(gcm, beat);
-                    gcm.commit();
                 }
+                gcm.commit();
             }
             (Mode::Main, Action::NewCueData(idx, cue)) => {
                 if state.mode != Mode::Lock {
@@ -100,6 +100,10 @@ pub async fn ui_task(mut gc: GraphicsController) {
                     draw_main_mark(gcm, label);
                     gcm.commit();
                 }
+            }
+            (Mode::Main, Action::NewBPM(bpm)) => {
+                draw_main_bpm(gcm, bpm as u16);
+                gcm.commit();
             }
             _ => {}
         }
@@ -138,9 +142,6 @@ async fn redraw_partial(state: &ViewState, gc: &mut GraphicsController) {
         Mode::TextEntry => {
             let mut app_state = STATE.lock().await;
             draw_textentry(gc, &mut app_state, state.text);
-        }
-        Mode::Main => {
-            gc.commit();
         }
         _ => {}
     }

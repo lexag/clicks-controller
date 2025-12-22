@@ -6,6 +6,7 @@
 //! controller
 
 use crate::events::Action;
+use crate::led::LED;
 use crate::ui::debug;
 use crate::{ACTION_UPSTREAM, CONTROL_CH, STATE};
 use common::mem::network::{IpAddress, SubscriberInfo};
@@ -91,12 +92,12 @@ pub async fn stack_task(stack: Stack<'static>) {
         );
         socket.bind(1234).unwrap();
 
+        ACTION_UPSTREAM.send(Action::LEDBlip(LED::Connection)).await;
         if send_request(
             Request::Subscribe(SubscriberInfo {
                 identifier: StaticString::new("ClicKS Hardware Controller"),
                 address: self_ip,
                 message_kinds: MessageType::Heartbeat
-                    | MessageType::TransportData
                     | MessageType::BeatData
                     | MessageType::ShutdownOccured
                     | MessageType::EventOccured,
@@ -137,7 +138,9 @@ pub async fn stack_task(stack: Stack<'static>) {
                 {
                     match action {
                         Action::RequestToCore(request) => {
-                            let _ = send_request(request, endpoint, &socket).await;
+                            if let Err(err) = send_request(request, endpoint, &socket).await {
+                                break;
+                            }
                         }
                         Action::ReloadConnection => {
                             break;
@@ -148,17 +151,32 @@ pub async fn stack_task(stack: Stack<'static>) {
             }
         }
 
+        ACTION_UPSTREAM
+            .send(Action::LEDSet(LED::Connection, false))
+            .await;
         socket.close();
     }
 }
 
 async fn receive_message(msg: SmallMessage) {
     match msg {
-        SmallMessage::TransportData(data) => {}
-        SmallMessage::BeatData(data) => {
-            if data.beat.count == 1 {
-                ACTION_UPSTREAM.send(Action::NewBeatData(data.beat)).await;
+        SmallMessage::TransportData(data) => {
+            if !data.running || data.ltc.f < 2 {
+                ACTION_UPSTREAM.send(Action::NewTransportData(data)).await;
             }
+        }
+        SmallMessage::BeatData(data) => {
+            ACTION_UPSTREAM.send(Action::NewBeatData(data.beat)).await;
+        }
+        SmallMessage::ShutdownOccured => {
+            ACTION_UPSTREAM
+                .send(Action::LEDSet(LED::Connection, false))
+                .await;
+        }
+        SmallMessage::Heartbeat(data) => {
+            ACTION_UPSTREAM
+                .send(Action::LEDSet(LED::Connection, true))
+                .await;
         }
         _ => {}
     }

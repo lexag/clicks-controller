@@ -132,13 +132,7 @@ impl GraphicsController {
                 .stroke_alignment(embedded_graphics::primitives::StrokeAlignment::Inside);
         }
 
-        if let Err(err) =
-            &Rectangle::new(origin, size).draw_styled(&style.build(), &mut self.display)
-        {
-            let mut buf = [0u8; 128];
-            let s = format_no_std::show(&mut buf, format_args!("{:?}", err)).unwrap_or_default();
-            debug_now(s);
-        }
+        &Rectangle::new(origin, size).draw_styled(&style.build(), &mut self.display);
     }
 
     pub fn x6_dot(&mut self, origin: Point, width: u32) {
