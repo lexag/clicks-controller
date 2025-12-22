@@ -19,6 +19,11 @@ mod ui;
 use defmt_rtt as _;
 use panic_probe as _;
 
+use alloc_cortex_m::CortexMHeap;
+
+#[global_allocator]
+static ALLOCATOR: CortexMHeap = CortexMHeap::empty();
+
 use crate::{
     buttons::{button_scanner_task, ButtonScanner},
     events::{Action, ButtonEvent, Mode},
@@ -87,6 +92,14 @@ bind_interrupts!(struct Irqs {
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) -> () {
+    // Init heap on global_allocator
+    #[allow(static_mut_refs)]
+    unsafe {
+        const HEAP_SIZE: usize = 1024 * 8;
+        static mut HEAP_MEM: [u8; HEAP_SIZE] = [0; HEAP_SIZE];
+        ALLOCATOR.init(HEAP_MEM.as_ptr() as usize, HEAP_SIZE)
+    };
+
     let mut config = Config::default();
     let mut p = embassy_rp::init(config);
 
