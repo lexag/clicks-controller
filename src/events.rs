@@ -1,5 +1,8 @@
 use crate::textentry::TextEntryContext;
 use common::{
+    beat::Beat,
+    cue::CueMetadata,
+    local::status::TransportState,
     mem::str::StaticString,
     protocol::{message::SmallMessage, request::Request},
 };
@@ -59,6 +62,10 @@ pub enum Action {
     Backspace,
     SeekCheckpoint,
     ForceRedraw,
+    NewBeatData(Beat),
+    NewCueData(u16, CueMetadata),
+    NewTransportData(TransportState),
+    NewLabelData(StaticString<8>),
     DebugMessage {
         msg: StaticString<32>,
     },

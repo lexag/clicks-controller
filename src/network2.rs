@@ -114,11 +114,12 @@ pub async fn stack_task(stack: Stack<'static>) {
                 }
             }
         } else {
+            let _ = send_request(Request::Ping, endpoint, &socket).await;
             loop {
                 buf.fill(0);
                 match select(socket.recv_from(&mut buf), CONTROL_CH.receive()).await {
                     Either::First(Ok((n, _ep))) => {
-                        if let Ok(msg) = postcard::from_bytes(&buf[..n]) {
+                        if let Ok(msg) = postcard::from_bytes(&buf[1..41]) {
                             receive_message(msg).await;
                         }
                     }
@@ -141,7 +142,20 @@ pub async fn stack_task(stack: Stack<'static>) {
 }
 
 async fn receive_message(msg: SmallMessage) {
-    ACTION_UPSTREAM.send(Action::MessageFromCore(msg)).await;
+    match msg {
+        SmallMessage::TransportData(data) => {}
+        SmallMessage::BeatData(data) => {
+            if data.beat.count != 1 {
+                return;
+            }
+            ACTION_UPSTREAM.send(Action::NewBeatData(data.beat)).await;
+            //let mut state = STATE.lock().await;
+            //state.beat_idx = data.beat_idx;
+            //state.beat = data.beat;
+            //drop(state);
+        }
+        _ => {}
+    }
 }
 
 async fn send_request(

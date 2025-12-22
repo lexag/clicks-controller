@@ -1,3 +1,4 @@
+use crate::ui::{debug, debug_now};
 use bitflags::bitflags;
 use embassy_rp::{
     i2c::{Async, I2c},
@@ -120,18 +121,24 @@ impl GraphicsController {
         fill: Option<BinaryColor>,
         stroke: Option<BinaryColor>,
     ) {
-        let style = PrimitiveStyleBuilder::new();
+        let mut style = PrimitiveStyleBuilder::new();
         if let Some(fill_c) = fill {
-            style.fill_color(fill_c);
+            style = style.fill_color(fill_c);
         }
         if let Some(stroke_c) = stroke {
-            style
+            style = style
                 .stroke_color(stroke_c)
                 .stroke_width(1)
                 .stroke_alignment(embedded_graphics::primitives::StrokeAlignment::Inside);
         }
 
-        let _ = &Rectangle::new(origin, size).draw_styled(&style.build(), &mut self.display);
+        if let Err(err) =
+            &Rectangle::new(origin, size).draw_styled(&style.build(), &mut self.display)
+        {
+            let mut buf = [0u8; 128];
+            let s = format_no_std::show(&mut buf, format_args!("{:?}", err)).unwrap_or_default();
+            debug_now(s);
+        }
     }
 
     pub fn x6_dot(&mut self, origin: Point, width: u32) {

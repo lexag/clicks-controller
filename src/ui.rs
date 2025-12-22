@@ -3,6 +3,8 @@ use crate::graphics::GraphicsController;
 use crate::menu::{self};
 use crate::state::SystemState;
 use crate::{ACTION_UPSTREAM, STATE, UI_CH};
+use common::beat::Beat;
+use common::cue::CueMetadata;
 use common::mem::str::StaticString;
 use embassy_executor::task;
 use embassy_time::Timer;
@@ -16,6 +18,11 @@ struct ViewState {
     text: StaticString<32>,
 }
 
+pub fn debug_now(s: &str) {
+    ACTION_UPSTREAM.try_send(Action::DebugMessage {
+        msg: StaticString::new(s),
+    });
+}
 pub async fn debug(s: &str) {
     ACTION_UPSTREAM
         .send(Action::DebugMessage {
@@ -42,16 +49,16 @@ pub async fn ui_task(mut gc: GraphicsController) {
         let action = rx.receive().await;
         let mut need_redraw = false;
 
-        match action {
-            Action::NextItem => {
+        match (state.mode, action) {
+            (Mode::Menu, Action::NextItem) => {
                 state.selected_index = state.selected_index.saturating_add(1);
                 need_redraw = true;
             }
-            Action::PreviousItem => {
+            (Mode::Menu, Action::PreviousItem) => {
                 state.selected_index = state.selected_index.saturating_sub(1);
                 need_redraw = true;
             }
-            Action::SelectItem => {
+            (Mode::Menu, Action::SelectItem) => {
                 let app_state = STATE.lock().await;
                 if let Some(action) = (menu::get_item(state.selected_index).exec)(app_state.clone())
                 {
@@ -59,22 +66,41 @@ pub async fn ui_task(mut gc: GraphicsController) {
                     ACTION_UPSTREAM.send(action).await;
                 }
             }
-            Action::ModeChange(m) => {
+            (_, Action::ModeChange(m)) => {
                 state.mode = m;
                 redraw_full(&state, gcm).await;
             }
-            Action::TextEntryStart { ctx, initial_value } => {
+            (_, Action::TextEntryStart { ctx, initial_value }) => {
                 state.text = initial_value;
                 redraw_full(&state, gcm).await;
             }
-            Action::TextEntryUpdate { ctx, value } => {
+            (_, Action::TextEntryUpdate { ctx, value }) => {
                 state.text = value;
                 need_redraw = true;
             }
-            Action::DebugMessage { msg } => {
+            (_, Action::DebugMessage { msg }) => {
                 draw_debug_message(gcm, msg);
             }
-            Action::ForceRedraw => redraw_full(&state, gcm).await,
+            (_, Action::ForceRedraw) => redraw_full(&state, gcm).await,
+            (Mode::Main, Action::NewBeatData(beat)) => {
+                if state.mode != Mode::Lock {
+                    draw_main_bpm(gcm, beat.tempo());
+                    draw_main_bar(gcm, beat);
+                    gcm.commit();
+                }
+            }
+            (Mode::Main, Action::NewCueData(idx, cue)) => {
+                if state.mode != Mode::Lock {
+                    draw_main_cue(gcm, idx, cue);
+                    gcm.commit();
+                }
+            }
+            (Mode::Main, Action::NewLabelData(label)) => {
+                if state.mode != Mode::Lock {
+                    draw_main_mark(gcm, label);
+                    gcm.commit();
+                }
+            }
             _ => {}
         }
 
@@ -85,15 +111,15 @@ pub async fn ui_task(mut gc: GraphicsController) {
 }
 
 async fn redraw_full(state: &ViewState, gc: &mut GraphicsController) {
-    let mut app_state = STATE.lock().await;
     gc.clear();
+    let mut app_state = STATE.lock().await;
     match state.mode {
         Mode::Lock => gc.logo(),
         Mode::Main => {
-            draw_main_bpm(gc, &mut app_state);
-            draw_main_cue(gc, &mut app_state);
-            draw_main_mark(gc, &mut app_state);
-            draw_main_bar(gc, &mut app_state);
+            draw_main_bpm(gc, app_state.beat.tempo());
+            draw_main_cue(gc, app_state.cue_idx, app_state.cue_metadata);
+            draw_main_mark(gc, app_state.mark_label);
+            draw_main_bar(gc, app_state.beat);
         }
         Mode::Menu => {
             draw_menu(gc, &mut app_state, state.selected_index);
@@ -107,17 +133,21 @@ async fn redraw_full(state: &ViewState, gc: &mut GraphicsController) {
 }
 
 async fn redraw_partial(state: &ViewState, gc: &mut GraphicsController) {
-    if state.mode == Mode::Menu {
-        redraw_full(state, gc).await
-    } else if state.mode == Mode::TextEntry {
-        let mut app_state = STATE.lock().await;
-        draw_textentry(gc, &mut app_state, state.text);
+    match state.mode {
+        Mode::Menu => redraw_full(state, gc).await,
+        Mode::TextEntry => {
+            let mut app_state = STATE.lock().await;
+            draw_textentry(gc, &mut app_state, state.text);
+        }
+        Mode::Main => {
+            gc.commit();
+        }
+        _ => {}
     }
 }
 
-fn draw_main_bpm(gc: &mut GraphicsController, app: &mut SystemState) {
+fn draw_main_bpm(gc: &mut GraphicsController, bpm: u16) -> Option<()> {
     let mut buf = [0u8; 3];
-    let bpm = app.bpm.read_ref() % 1000;
     let s = format_no_std::show(&mut buf, format_args!("{: >3}", bpm)).unwrap_or_default();
     gc.text_strip(
         s,
@@ -126,15 +156,14 @@ fn draw_main_bpm(gc: &mut GraphicsController, app: &mut SystemState) {
         3,
         GraphicsController::TL_ALIGN,
     );
+    None
 }
 
-fn draw_main_cue(gc: &mut GraphicsController, app: &mut SystemState) {
+fn draw_main_cue(gc: &mut GraphicsController, idx: u16, cue: CueMetadata) -> Option<()> {
     let mut buf = [0u8; 40];
-    let cue_idx = app.cue_idx.read_ref();
-    let cue = app.cue_metadata.read_ref();
     let s = format_no_std::show(
         &mut buf,
-        format_args!("{: >3}:{: <32}", cue_idx, cue.name.str()),
+        format_args!("{: >3}:{: <32}", idx, cue.name.str()),
     )
     .unwrap_or_default();
     gc.text_strip(
@@ -144,30 +173,32 @@ fn draw_main_cue(gc: &mut GraphicsController, app: &mut SystemState) {
         16,
         GraphicsController::TL_ALIGN,
     );
+    None
 }
 
-fn draw_main_mark(gc: &mut GraphicsController, app: &mut SystemState) {
-    let mark_idx = app.mark_label.read();
+fn draw_main_mark(gc: &mut GraphicsController, label: StaticString<8>) -> Option<()> {
     gc.text_strip(
-        mark_idx.str(),
+        label.str(),
         Point::new(0, 11),
         GraphicsController::CHAR_LARGE,
         8,
         GraphicsController::TL_ALIGN,
     );
+    None
 }
 
-fn draw_main_bar(gc: &mut GraphicsController, app: &mut SystemState) {
+fn draw_main_bar(gc: &mut GraphicsController, beat: Beat) -> Option<()> {
     let mut buf = [0u8; 4];
-    let s = format_no_std::show(&mut buf, format_args!("{: >4}", app.beat.read().bar_number))
-        .unwrap_or_default();
+    let s =
+        format_no_std::show(&mut buf, format_args!("{: >3}", beat.bar_number)).unwrap_or_default();
     gc.text_strip(
         s,
         Point::new(0, 33),
         GraphicsController::CHAR_LARGE,
-        4,
+        3,
         GraphicsController::TL_ALIGN,
     );
+    None
 }
 
 fn draw_menu(gc: &mut GraphicsController, app: &mut SystemState, start_idx: usize) {
@@ -199,8 +230,6 @@ fn draw_textentry(gc: &mut GraphicsController, app: &mut SystemState, val: Stati
         Some(BinaryColor::On),
         None,
     );
-
-    gc.clear();
 
     gc.text_strip(
         "Edit Value",

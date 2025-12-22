@@ -49,12 +49,12 @@ impl<T: Clone> TrackedValue<T> {
 
 #[derive(Clone, Default)]
 pub struct SystemState {
-    pub cue_metadata: TrackedValue<CueMetadata>,
-    pub cue_idx: TrackedValue<u16>,
-    pub beat_idx: TrackedValue<u16>,
-    pub beat: TrackedValue<Beat>,
-    pub mark_label: TrackedValue<StaticString<8>>,
-    pub bpm: TrackedValue<u16>,
+    pub cue_metadata: CueMetadata,
+    pub cue_idx: u16,
+    pub beat_idx: u16,
+    pub beat: Beat,
+    pub mark_label: StaticString<8>,
+    pub bpm: u16,
     pub core_ip: IpAddress,
     pub self_ip: IpAddress,
 }
@@ -62,20 +62,20 @@ pub struct SystemState {
 impl SystemState {
     pub const fn new() -> Self {
         Self {
-            beat: TrackedValue::new(Beat::empty()),
-            cue_metadata: TrackedValue::new(CueMetadata::const_default()),
-            beat_idx: TrackedValue::new(0),
-            cue_idx: TrackedValue::new(0),
-            mark_label: TrackedValue::new(StaticString::empty()),
+            beat: Beat::empty(),
+            cue_metadata: CueMetadata::const_default(),
+            beat_idx: 0,
+            cue_idx: 0,
+            mark_label: StaticString::empty(),
             core_ip: IpAddress {
-                port: 0,
-                addr: [0, 0, 0, 0],
+                port: 8081,
+                addr: [192, 168, 1, 135],
             },
             self_ip: IpAddress {
                 port: 0,
                 addr: [0, 0, 0, 0],
             },
-            bpm: TrackedValue::new(120),
+            bpm: 120,
         }
     }
 }
