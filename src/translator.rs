@@ -1,5 +1,6 @@
 use crate::events::{Action, ButtonId, Mode};
 use crate::{menu, ACTION_SRC, ACTION_UPSTREAM, BUTTON_CH, MODE_SIGNAL, STATE};
+use common::protocol::request::{ControlAction, Request};
 use embassy_executor::task;
 use embassy_futures::select::{select, Either};
 
@@ -47,13 +48,25 @@ pub async fn input_translator_task() {
 
 fn action_lut(mode: Mode, shift: bool, id: ButtonId) -> Option<Action> {
     match (mode, shift, id) {
-        //(Mode::Lock, _, ButtonId::Start) => panic!(),
+        (Mode::Lock, _, ButtonId::Start) => None,
         (Mode::Lock, true, ButtonId::Stop) => Some(Action::ModeChange(Mode::Main)),
         (Mode::Lock, _, _) => None,
         (Mode::Main, false, ButtonId::Menu) => Some(Action::ModeChange(Mode::Menu)),
-        (Mode::Main, false, ButtonId::Next) => Some(Action::NextCue),
-        (Mode::Main, false, ButtonId::Previous) => Some(Action::PreviousCue),
-        (Mode::Main, true, ButtonId::Previous) => Some(Action::SeekCheckpoint),
+        (Mode::Main, false, ButtonId::Next) => Some(Action::RequestToCore(Request::ControlAction(
+            ControlAction::LoadNextCue,
+        ))),
+        (Mode::Main, false, ButtonId::Previous) => Some(Action::RequestToCore(
+            Request::ControlAction(ControlAction::LoadPreviousCue),
+        )),
+        (Mode::Main, true, ButtonId::Previous) => Some(Action::RequestToCore(
+            Request::ControlAction(ControlAction::TransportZero),
+        )),
+        (_, _, ButtonId::Start) => Some(Action::RequestToCore(Request::ControlAction(
+            ControlAction::TransportStart,
+        ))),
+        (_, false, ButtonId::Stop) => Some(Action::RequestToCore(Request::ControlAction(
+            ControlAction::TransportStop,
+        ))),
         (Mode::Menu, false, ButtonId::Next) => Some(Action::NextItem),
         (Mode::Menu, false, ButtonId::Previous) => Some(Action::PreviousItem),
         (Mode::Menu, false, ButtonId::Menu) => Some(Action::SelectItem),

@@ -24,7 +24,7 @@ use embassy_rp::gpio::{Input, Output};
 use embassy_rp::peripherals::PIO0;
 use embassy_rp::spi::Async;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_time::Timer;
+use embassy_time::{Duration, Timer, WithTimeout};
 
 pub type SpiType = embassy_rp::pio_programs::spi::Spi<'static, PIO0, 0, Async>;
 pub type SpiBusType = embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice<
@@ -117,13 +117,25 @@ pub async fn stack_task(stack: Stack<'static>) {
             let _ = send_request(Request::Ping, endpoint, &socket).await;
             loop {
                 buf.fill(0);
-                match select(socket.recv_from(&mut buf), CONTROL_CH.receive()).await {
-                    Either::First(Ok((n, _ep))) => {
-                        if let Ok(msg) = postcard::from_bytes(&buf[1..41]) {
-                            receive_message(msg).await;
-                        }
+                // Handle network receives
+                if let Ok(Ok((n, _ep))) = socket
+                    .recv_from(&mut buf)
+                    .with_timeout(Duration::from_millis(5))
+                    .await
+                {
+                    let res = postcard::from_bytes(&buf[1..41]);
+                    if let Ok(msg) = res {
+                        receive_message(msg).await;
                     }
-                    Either::Second(action) => match action {
+                }
+
+                // Handle action receives
+                if let Ok(action) = CONTROL_CH
+                    .receive()
+                    .with_timeout(Duration::from_millis(5))
+                    .await
+                {
+                    match action {
                         Action::RequestToCore(request) => {
                             let _ = send_request(request, endpoint, &socket).await;
                         }
@@ -131,8 +143,7 @@ pub async fn stack_task(stack: Stack<'static>) {
                             break;
                         }
                         _ => {}
-                    },
-                    _ => {}
+                    }
                 }
             }
         }
@@ -145,14 +156,9 @@ async fn receive_message(msg: SmallMessage) {
     match msg {
         SmallMessage::TransportData(data) => {}
         SmallMessage::BeatData(data) => {
-            if data.beat.count != 1 {
-                return;
+            if data.beat.count == 1 {
+                ACTION_UPSTREAM.send(Action::NewBeatData(data.beat)).await;
             }
-            ACTION_UPSTREAM.send(Action::NewBeatData(data.beat)).await;
-            //let mut state = STATE.lock().await;
-            //state.beat_idx = data.beat_idx;
-            //state.beat = data.beat;
-            //drop(state);
         }
         _ => {}
     }
