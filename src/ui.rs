@@ -16,6 +16,7 @@ struct ViewState {
     mode: Mode,
     selected_index: usize,
     text: StaticString<32>,
+    bpm: u16,
 }
 
 pub fn debug_now(s: &str) {
@@ -40,6 +41,7 @@ pub async fn ui_task(mut gc: GraphicsController) {
         mode: Mode::Lock,
         selected_index: 0,
         text: StaticString::new("Unused text"),
+        bpm: 120,
     };
 
     let gcm = &mut gc;
@@ -83,7 +85,10 @@ pub async fn ui_task(mut gc: GraphicsController) {
             }
             (_, Action::ForceRedraw) => redraw_full(&state, gcm).await,
             (Mode::Main, Action::NewBeatData(beat)) => {
-                draw_main_bpm(gcm, beat.tempo());
+                if state.bpm != beat.tempo() {
+                    state.bpm = beat.tempo();
+                    draw_main_bpm(gcm, state.bpm);
+                }
                 if beat.count == 1 {
                     draw_main_bar(gcm, beat);
                 }
@@ -96,10 +101,8 @@ pub async fn ui_task(mut gc: GraphicsController) {
                 }
             }
             (Mode::Main, Action::NewLabelData(label)) => {
-                if state.mode != Mode::Lock {
-                    draw_main_mark(gcm, label);
-                    gcm.commit();
-                }
+                draw_main_mark(gcm, label);
+                gcm.commit();
             }
             (Mode::Main, Action::NewBPM(bpm)) => {
                 draw_main_bpm(gcm, bpm as u16);
@@ -164,7 +167,7 @@ fn draw_main_cue(gc: &mut GraphicsController, idx: u16, cue: CueMetadata) -> Opt
     let mut buf = [0u8; 40];
     let s = format_no_std::show(
         &mut buf,
-        format_args!("{: >3}:{: <32}", idx, cue.name.str()),
+        format_args!("{: >3}:{: <32}", idx, cue.human_ident.str()),
     )
     .unwrap_or_default();
     gc.text_strip(

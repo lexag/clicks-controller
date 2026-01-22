@@ -5,7 +5,7 @@ name = "clicks-controller"
 version = "0.1.0"
 
 [dependencies]
-common = { git = "https://github.com/lexag/clicks-common.git", branch = "main", features = ["postcard"] }
+common = { git = "https://github.com/lexag/clicks-common.git", branch = "dev", features = ["postcard"] }
 #cortex-m = "0.7.7"
 #cortex-m-rt = "0.7.0"
 embedded-time = "0.12.0"

@@ -7,8 +7,8 @@
 
 use crate::events::Action;
 use crate::led::LED;
-use crate::ui::debug;
-use crate::{ACTION_UPSTREAM, CONTROL_CH, STATE};
+use crate::{ACTION_UPSTREAM, CONTROL_CH, LED_CH, STATE, UI_CH};
+use common::event::EventDescription;
 use common::mem::network::{IpAddress, SubscriberInfo};
 use common::mem::str::StaticString;
 use common::mem::typeflags::MessageType;
@@ -92,22 +92,22 @@ pub async fn stack_task(stack: Stack<'static>) {
         );
         socket.bind(1234).unwrap();
 
-        ACTION_UPSTREAM.send(Action::LEDBlip(LED::Connection)).await;
-        if send_request(
+        LED_CH.send(Action::LEDBlip(LED::Connection)).await;
+        if let Err(_err) = send_request(
             Request::Subscribe(SubscriberInfo {
                 identifier: StaticString::new("ClicKS Hardware Controller"),
                 address: self_ip,
-                message_kinds: MessageType::Heartbeat
+                message_kinds: MessageType::ShutdownOccured
                     | MessageType::BeatData
-                    | MessageType::ShutdownOccured
-                    | MessageType::EventOccured,
+                    | MessageType::EventOccured
+                    | MessageType::TransportData
+                    | MessageType::SmallCueData,
                 last_contact: 0,
             }),
             endpoint,
             &socket,
         )
         .await
-        .is_err()
         {
             loop {
                 if let Action::ReloadConnection = CONTROL_CH.receive().await {
@@ -116,12 +116,13 @@ pub async fn stack_task(stack: Stack<'static>) {
             }
         } else {
             let _ = send_request(Request::Ping, endpoint, &socket).await;
+            LED_CH.send(Action::LEDSet(LED::Connection, true)).await;
             loop {
                 buf.fill(0);
                 // Handle network receives
                 if let Ok(Ok((n, _ep))) = socket
                     .recv_from(&mut buf)
-                    .with_timeout(Duration::from_millis(5))
+                    .with_timeout(Duration::from_millis(10))
                     .await
                 {
                     let res = postcard::from_bytes(&buf[1..41]);
@@ -133,7 +134,7 @@ pub async fn stack_task(stack: Stack<'static>) {
                 // Handle action receives
                 if let Ok(action) = CONTROL_CH
                     .receive()
-                    .with_timeout(Duration::from_millis(5))
+                    .with_timeout(Duration::from_millis(10))
                     .await
                 {
                     match action {
@@ -151,32 +152,36 @@ pub async fn stack_task(stack: Stack<'static>) {
             }
         }
 
-        ACTION_UPSTREAM
-            .send(Action::LEDSet(LED::Connection, false))
-            .await;
+        LED_CH.send(Action::LEDSet(LED::Connection, false)).await;
         socket.close();
     }
 }
 
 async fn receive_message(msg: SmallMessage) {
     match msg {
+        SmallMessage::CueData(data) => {
+            ACTION_UPSTREAM
+                .send(Action::NewCueData(data.cue_idx, data.cue_metadata))
+                .await;
+        }
         SmallMessage::TransportData(data) => {
-            if !data.running || data.ltc.f < 2 {
-                ACTION_UPSTREAM.send(Action::NewTransportData(data)).await;
-            }
+            ACTION_UPSTREAM.send(Action::NewTransportData(data)).await;
         }
         SmallMessage::BeatData(data) => {
-            ACTION_UPSTREAM.send(Action::NewBeatData(data.beat)).await;
+            LED_CH.send(Action::NewBeatData(data.beat)).await;
+            UI_CH.send(Action::NewBeatData(data.beat)).await;
         }
+        SmallMessage::EventOccured(event) => match event {
+            EventDescription::RehearsalMarkEvent { label } => {
+                UI_CH.send(Action::NewLabelData(label)).await;
+            }
+            _ => {}
+        },
         SmallMessage::ShutdownOccured => {
-            ACTION_UPSTREAM
-                .send(Action::LEDSet(LED::Connection, false))
-                .await;
+            LED_CH.send(Action::LEDSet(LED::Connection, false)).await;
         }
         SmallMessage::Heartbeat(data) => {
-            ACTION_UPSTREAM
-                .send(Action::LEDSet(LED::Connection, true))
-                .await;
+            LED_CH.send(Action::LEDSet(LED::Connection, true)).await;
         }
         _ => {}
     }
